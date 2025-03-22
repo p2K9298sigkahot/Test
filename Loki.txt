@@ -1,0 +1,1282 @@
+local player = game.Players.LocalPlayer
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local Debris = game:GetService("Debris") -- Add Debris service
+
+local cooldownTime = 10
+local abilityKey = Enum.KeyCode.Z
+local buttonName = "BrazilianZalaButton"
+local abilityName = "Loki lightspeed"
+local buttonPosition = -3
+
+local isCooldown = false
+local lastAbilityTime = 0
+local cooldownDuration = cooldownTime
+local tweenInfo = TweenInfo.new(cooldownTime, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut, 0, false, 0)
+
+-- **Camera Shake Function**: Adds a visual shake effect, works on both PC and mobile
+local function shakeCamera(intensity, duration)
+    local camera = workspace.CurrentCamera
+    local originalCFrame = camera.CFrame
+    local elapsed = 0
+    local heartbeat = RunService.Heartbeat
+    local connection
+    connection = heartbeat:Connect(function(dt)
+        elapsed = elapsed + dt
+        if elapsed < duration then
+            local shakeOffset = CFrame.new(
+                math.random(-intensity, intensity) / 100,
+                math.random(-intensity, intensity) / 100,
+                0
+            )
+            camera.CFrame = originalCFrame * shakeOffset
+        else
+            camera.CFrame = originalCFrame
+            connection:Disconnect()
+        end
+    end)
+end
+
+-- **Display Subtitle**: Shows a subtitle on the screen
+local function displaySubtitle(text, duration)
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "SubtitleGui"
+    screenGui.Parent = player.PlayerGui
+    local textLabel = Instance.new("TextLabel")
+    textLabel.Name = "SubtitleLabel"
+    textLabel.Text = text
+    textLabel.Size = UDim2.new(0.8, 0, 0.05, 0)
+    textLabel.Position = UDim2.new(0.1, 0, 0.75, 0)
+    textLabel.TextScaled = true
+    textLabel.BackgroundTransparency = 1
+    textLabel.TextColor3 = Color3.new(0, 1, 1)
+    textLabel.Font = Enum.Font.GothamBlack
+    textLabel.TextStrokeTransparency = 0.3
+    textLabel.Parent = screenGui
+    Debris:AddItem(screenGui, duration)
+end
+
+-- **Display Overhead Text**: Shows a text above the player's head
+local function displayOverheadText(character, text, duration)
+    local billboardGui = Instance.new("BillboardGui")
+    billboardGui.Name = "OverheadText"
+    billboardGui.Size = UDim2.new(4, 0, 1, 0)
+    billboardGui.StudsOffset = Vector3.new(0, 3, 0)
+    billboardGui.Adornee = character:WaitForChild("Head")
+    billboardGui.Parent = character
+
+    local textLabel = Instance.new("TextLabel")
+    textLabel.Text = text
+    textLabel.Size = UDim2.new(1, 0, 1, 0)
+    textLabel.BackgroundTransparency = 1
+    textLabel.TextColor3 = Color3.new(0, 1, 1)
+    textLabel.Font = Enum.Font.GothamBlack
+    textLabel.TextScaled = true
+    textLabel.Parent = billboardGui
+
+    Debris:AddItem(billboardGui, duration)
+end
+
+-- **Initialize Abilities**: Sets up all abilities and UI elements
+local function initializeAbility()
+    local button = player.PlayerGui.InGameUI.Bottom.Abilities["1"]:Clone()
+
+    local function triggerAbility()
+        if isCooldown then return end
+
+        local currentTime = tick()
+        if currentTime - lastAbilityTime < cooldownDuration then
+            return
+        end
+
+        lastAbilityTime = currentTime
+        isCooldown = true
+
+        -- Clear existing ability text and subtitle
+        if player.PlayerGui:FindFirstChild("AbilityTextGui") then
+            player.PlayerGui.AbilityTextGui:Destroy()
+        end
+        if player.PlayerGui:FindFirstChild("SubtitleGui") then
+            player.PlayerGui.SubtitleGui:Destroy()
+        end
+
+        local character = player.Character or player.CharacterAdded:Wait()
+        local humanoid = character:WaitForChild("Humanoid")
+        local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
+
+        -- Load animations and sounds
+        local animation1 = Instance.new("Animation")
+        animation1.AnimationId = "rbxassetid://99916870664377"
+        local animationTrack1 = humanoid:LoadAnimation(animation1)
+
+        local sound1 = Instance.new("Sound")
+        sound1.SoundId = "rbxassetid://4909206080"
+        sound1.Volume = 5
+        sound1.Parent = humanoidRootPart
+
+        local visualEffect = Instance.new("ParticleEmitter")
+        visualEffect.Texture = "rbxassetid://107877955127835"
+        visualEffect.Color = ColorSequence.new(Color3.new(1, 0, 0))
+        visualEffect.Lifetime = NumberRange.new(0.5, 1)
+        visualEffect.Rate = 100
+        visualEffect.Speed = NumberRange.new(20, 30)
+        visualEffect.Size = NumberSequence.new(2, 3)
+        visualEffect.Transparency = NumberSequence.new(0, 0.5)
+        visualEffect.Enabled = false
+        visualEffect.Parent = humanoidRootPart
+
+        local coolEffect = Instance.new("ParticleEmitter")
+        coolEffect.Texture = "rbxassetid://107877955127835"
+        coolEffect.Color = ColorSequence.new(Color3.new(0, 1, 1))
+        coolEffect.Lifetime = NumberRange.new(0.5, 1.5)
+        coolEffect.Rate = 50
+        coolEffect.Speed = NumberRange.new(15, 25)
+        coolEffect.Size = NumberSequence.new(3, 4)
+        coolEffect.Transparency = NumberSequence.new(0, 0.7)
+        coolEffect.Enabled = false
+        coolEffect.Parent = humanoidRootPart
+
+        -- Load aura VFX
+        local vfx = game:GetObjects("rbxassetid://106192507657319")[1]
+        local particleEmitters = {}
+        for _, v in pairs(vfx:GetDescendants()) do
+            if v:IsA("ParticleEmitter") then
+                for i = 1, 3 do -- Duplicate each particle emitter 3 times
+                    local emitterClone = v:Clone()
+                    table.insert(particleEmitters, emitterClone)
+                end
+            end
+        end
+
+        -- Preload the subtitle sound
+        local subtitleSound = Instance.new("Sound")
+        subtitleSound.SoundId = "rbxassetid://137874238230037"
+        subtitleSound.Volume = 5
+        subtitleSound.Parent = humanoidRootPart
+
+        --- **Ability 1: Lightspeed** ---
+        local function triggerLightspeed()
+            -- Play subtitle sound and display subtitle
+            subtitleSound:Play()
+            displaySubtitle("You Got Good Foresight, But I'm Fast.", 2)
+            displayOverheadText(character, "Speed!", 2)
+
+            -- Delay the start of the ability to allow the subtitle to show
+            wait(2)
+
+            -- Start the ability
+            animationTrack1:Play()
+            animationTrack1:AdjustSpeed(1.5)
+            local zigzagDuration = 0.09
+            local zigzagDistance = 9
+            visualEffect.Enabled = true
+            coolEffect.Enabled = true
+
+            -- Enable aura VFX
+            for _, emitter in pairs(particleEmitters) do
+                emitter.Enabled = true
+                emitter.Parent = humanoidRootPart
+            end
+
+            local segments = 10
+            local function playZigzagTweens(count)
+                if count > segments then
+                    visualEffect.Enabled = false
+                    coolEffect.Enabled = false
+
+                    -- Disable aura VFX
+                    for _, emitter in pairs(particleEmitters) do
+                        emitter.Enabled = false
+                    end
+
+                    return
+                end
+                local currentPos = humanoidRootPart.Position
+                local direction = (count % 2 == 1) and 1 or -1
+                local forwardVector = humanoidRootPart.CFrame.LookVector
+                local rightVector = humanoidRootPart.CFrame.RightVector
+                local targetPosition = currentPos + (forwardVector * zigzagDistance + direction * rightVector * zigzagDistance)
+                local targetCFrame = CFrame.new(targetPosition, targetPosition + forwardVector)
+                local tweenInfo = TweenInfo.new(zigzagDuration, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut)
+                local tween = TweenService:Create(humanoidRootPart, tweenInfo, {CFrame = targetCFrame})
+                local s = sound1:Clone()
+                s.Parent = humanoidRootPart
+                s:Play()
+                Debris:AddItem(s, s.TimeLength)
+                tween:Play()
+                tween.Completed:Connect(function()
+                    playZigzagTweens(count + 1)
+                end)
+            end
+            playZigzagTweens(1)
+        end
+
+        triggerLightspeed() -- Activate the ability
+
+        local cooldownFrame = button:FindFirstChild("Cooldown")
+        local tween = TweenService:Create(cooldownFrame.UIGradient, tweenInfo, { Offset = Vector2.new(0, 1) })
+
+        cooldownFrame.UIGradient.Offset = Vector2.new(0, 0)
+        tween:Play()
+        tween.Completed:Connect(function()
+            isCooldown = false
+            print("Cooldown finished.")
+        end)
+
+        print("Cooldown started.")
+    end
+
+    button.Name = buttonName
+    button.Parent = player.PlayerGui.InGameUI.Bottom.Abilities
+    button.LayoutOrder = buttonPosition
+    button.Keybind.Text = abilityKey.Name
+    button.Timer.Text = abilityName
+    button.ActualTimer.Text = ""
+
+    button.Activated:Connect(triggerAbility)
+    UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if not gameProcessed and input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == abilityKey then
+            triggerAbility()
+        end
+    end)
+end
+
+initializeAbility()
+
+
+
+
+local player = game.Players.LocalPlayer
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local Debris = game:GetService("Debris")
+
+local cooldownTime = 10
+local abilityKey = Enum.KeyCode.Z
+local buttonName = "BrazilianZalaButton"
+local abilityName = "Speed Trap"
+local buttonPosition = -3
+
+local isCooldown = false
+local lastAbilityTime = 0
+local cooldownDuration = cooldownTime
+local tweenInfo = TweenInfo.new(cooldownTime, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut, 0, false, 0)
+
+-- Camera Shake Function
+local function shakeCamera(intensity, duration)
+    local camera = workspace.CurrentCamera
+    local originalCFrame = camera.CFrame
+    local elapsed = 0
+    local heartbeat = RunService.Heartbeat
+    local connection
+    connection = heartbeat:Connect(function(dt)
+        elapsed = elapsed + dt
+        if elapsed < duration then
+            local shakeOffset = CFrame.new(
+                math.random(-intensity, intensity) / 100,
+                math.random(-intensity, intensity) / 100,
+                0
+            )
+            camera.CFrame = originalCFrame * shakeOffset
+        else
+            camera.CFrame = originalCFrame
+            connection:Disconnect()
+        end
+    end)
+end
+
+-- Display Subtitle
+local function displaySubtitle(text, duration)
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "SubtitleGui"
+    screenGui.Parent = player.PlayerGui
+    local textLabel = Instance.new("TextLabel")
+    textLabel.Name = "SubtitleLabel"
+    textLabel.Text = text
+    textLabel.Size = UDim2.new(0.8, 0, 0.05, 0)
+    textLabel.Position = UDim2.new(0.1, 0, 0.75, 0)
+    textLabel.TextScaled = true
+    textLabel.BackgroundTransparency = 1
+    textLabel.TextColor3 = Color3.new(0, 1, 1)
+    textLabel.Font = Enum.Font.GothamBlack
+    textLabel.TextStrokeTransparency = 0.3
+    textLabel.Parent = screenGui
+    Debris:AddItem(screenGui, duration)
+end
+
+-- Display Overhead Text
+local function displayOverheadText(character, text, duration)
+    local billboardGui = Instance.new("BillboardGui")
+    billboardGui.Name = "OverheadText"
+    billboardGui.Size = UDim2.new(4, 0, 1, 0)
+    billboardGui.StudsOffset = Vector3.new(0, 3, 0)
+    billboardGui.Adornee = character:WaitForChild("Head")
+    billboardGui.Parent = character
+
+    local textLabel = Instance.new("TextLabel")
+    textLabel.Text = text
+    textLabel.Size = UDim2.new(1, 0, 1, 0)
+    textLabel.BackgroundTransparency = 1
+    textLabel.TextColor3 = Color3.new(0, 1, 1)
+    textLabel.Font = Enum.Font.GothamBlack
+    textLabel.TextScaled = true
+    textLabel.Parent = billboardGui
+
+    Debris:AddItem(billboardGui, duration)
+end
+
+-- Function to play the ability VFX
+local function playAura(character)
+    local vfx = game:GetObjects("rbxassetid://12704915626")[1]
+    local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+
+    if rootPart and vfx then
+        for _, v in pairs(vfx:GetDescendants()) do
+            if v:IsA("ParticleEmitter") then
+                for i = 1, 16 do  -- Add multiple aura effects
+                    local auraClone = v:Clone()
+                    auraClone.Parent = rootPart
+                end
+            end
+        end
+    end
+end
+
+local function stopAura(character)
+    local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+
+    if rootPart then
+        for _, v in pairs(rootPart:GetChildren()) do
+            if v:IsA("ParticleEmitter") then
+                v:Destroy()
+            end
+        end
+    end
+end
+
+-- Function to handle movement
+local function tweenToPosition(character, offsetMultiplier, animationId, soundId)
+    local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
+    local humanoid = character:WaitForChild("Humanoid")
+
+    local animation = Instance.new("Animation")
+    animation.AnimationId = animationId
+    local animationTrack = humanoid:LoadAnimation(animation)
+
+    local currentPosition = humanoidRootPart.Position
+    local offset = (humanoidRootPart.CFrame.LookVector + humanoidRootPart.CFrame.RightVector).unit * offsetMultiplier
+    local targetPosition = currentPosition + offset 
+
+    local tweenInfo = TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    local goal = {CFrame = CFrame.new(targetPosition)} 
+
+    local tween = TweenService:Create(humanoidRootPart, tweenInfo, goal)
+
+    animationTrack:Play()
+    playAura(character)
+
+    local sound = Instance.new("Sound")
+    sound.SoundId = soundId
+    sound.Parent = humanoidRootPart
+    sound:Play() 
+
+    tween:Play()
+    tween.Completed:Wait()
+    stopAura(character)
+end
+
+-- Initialize Abilities
+local function initializeAbility()
+    local button = player.PlayerGui.InGameUI.Bottom.Abilities["1"]:Clone()
+
+    local function triggerAbility()
+        if isCooldown then return end
+
+        local currentTime = tick()
+        if currentTime - lastAbilityTime < cooldownDuration then
+            return
+        end
+
+        lastAbilityTime = currentTime
+        isCooldown = true
+
+        local character = player.Character or player.CharacterAdded:Wait()
+        if character then
+            tweenToPosition(character, 35, "rbxassetid://74760828875758", "rbxassetid://107991130416439") -- Move forward-right
+            tweenToPosition(character, 30, "rbxassetid://104460260153279", "rbxassetid://91616529441627") -- Move forward
+        end
+
+        local cooldownFrame = button:FindFirstChild("Cooldown")
+        local tween = TweenService:Create(cooldownFrame.UIGradient, tweenInfo, { Offset = Vector2.new(0, 1) })
+
+        cooldownFrame.UIGradient.Offset = Vector2.new(0, 0)
+        tween:Play()
+        tween.Completed:Connect(function()
+            isCooldown = false
+            print("Cooldown finished.")
+        end)
+
+        print("Cooldown started.")
+    end
+
+    button.Name = buttonName
+    button.Parent = player.PlayerGui.InGameUI.Bottom.Abilities
+    button.LayoutOrder = buttonPosition
+    button.Keybind.Text = abilityKey.Name
+    button.Timer.Text = abilityName
+    button.ActualTimer.Text = ""
+
+    button.Activated:Connect(triggerAbility)
+    UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if not gameProcessed and input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == abilityKey then
+            triggerAbility()
+        end
+    end)
+end
+
+initializeAbility()
+
+
+
+local player = game.Players.LocalPlayer
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+local cooldownTime = 4  -- Cooldown time (in seconds)
+local abilityKey = Enum.KeyCode.L  -- Key to activate ability
+local buttonName = "BrazilianZalaButton"  -- Name for the ability button
+local abilityName = "Speed Shot"  -- Name of the ability
+local buttonPosition = -3  -- Position in the layout (can be adjusted)
+
+local isCooldown = false
+local lastAbilityTime = 0
+local cooldownDuration = cooldownTime  -- Cooldown duration (in seconds)
+local tweenInfo = TweenInfo.new(cooldownTime, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut, 0, false, 0)
+
+-- Initialize ability button and setup
+local function initializeAbility()
+    local button = player.PlayerGui.InGameUI.Bottom.Abilities["1"]:Clone()
+
+    -- Trigger ability logic
+    local function triggerAbility()
+        if isCooldown then return end
+
+        local currentTime = tick()
+        if currentTime - lastAbilityTime < cooldownDuration then
+            return
+        end
+
+        lastAbilityTime = currentTime
+        isCooldown = true
+
+
+local player = game.Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoid = character:FindFirstChildOfClass("Humanoid")
+
+if humanoid then
+    local anim = Instance.new("Animation")
+    anim.AnimationId = "rbxassetid://115758343285328"
+
+    local animator = humanoid:FindFirstChildOfClass("Animator") or humanoid:WaitForChild("Animator")
+    local track = animator:LoadAnimation(anim)
+    track.Priority = Enum.AnimationPriority.Action4
+    track:Play()
+wait(0.75)
+
+        local Players = game:GetService("Players")
+        local RunService = game:GetService("RunService")
+
+        if not RunService:IsClient() then return end
+
+        local player = Players.LocalPlayer
+        local character = player.Character or player.CharacterAdded:Wait()
+        local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
+
+        local effectPart = Instance.new("Part")
+        effectPart.Anchored = true
+        effectPart.CanCollide = false
+        effectPart.Transparency = 1
+        effectPart.Parent = workspace
+-- Update the effect position based on LookVector
+RunService.Heartbeat:Connect(function()
+    local forward = humanoidRootPart.CFrame.LookVector
+    local effectPosition = humanoidRootPart.Position + (forward * 5)
+    effectPart.CFrame = CFrame.new(effectPosition, effectPosition + forward)
+end)
+
+
+        local function createFolderPath(parent, path)
+            if not path or path == "" then return parent end
+            
+            local current = parent
+            for _, name in ipairs(string.split(path, ".")) do
+                local existing = current:FindFirstChild(name)
+                if not existing then
+                    local new = Instance.new("Folder")
+                    new.Name = name
+                    new.Parent = current
+                    current = new
+                else
+                    current = existing
+                end
+            end
+            return current
+        end
+
+        local particles = {}
+    
+            do
+                local particle = Instance.new("ParticleEmitter")
+                local parent = effectPart
+                        particle.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
+                particle.FlipbookFramerate = NumberRange.new(1.000000, 1.000000)
+                particle.LightInfluence = 0
+                particle.Lifetime = NumberRange.new(0.400000, 0.400000)
+                particle.FlipbookLayout = Enum.ParticleFlipbookLayout.Grid4x4
+                particle.SpreadAngle = Vector2.new(0.000000, 0.000000)
+                particle.LockedToPart = false
+                particle.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0.000000, 1.000000), NumberSequenceKeypoint.new(0.035200, 0.900000), NumberSequenceKeypoint.new(1.000000, 1.000000)})
+                particle.Orientation = Enum.ParticleOrientation.VelocityPerpendicular
+particle.Color = ColorSequence.new({ 
+    ColorSequenceKeypoint.new(0, Color3.new(0, 0, 1)), 
+    ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)) 
+})
+                particle.Drag = 5
+                particle.FlipbookStartRandom = false
+                particle.TimeScale = 1
+                particle.VelocitySpread = 0
+                particle.Squash = NumberSequence.new({NumberSequenceKeypoint.new(0.000000, 0.000000), NumberSequenceKeypoint.new(1.000000, 0.000000)})
+                particle.Speed = NumberRange.new(0.001000, 0.001000)
+                particle.Brightness = 40
+                particle.Size = NumberSequence.new({NumberSequenceKeypoint.new(0.000000, 6.449984), NumberSequenceKeypoint.new(1.000000, 17.487822)})
+                particle.Enabled = false
+                particle.Acceleration = Vector3.new(0.000000, 0.000000, 0.000000)
+                particle.RotSpeed = NumberRange.new(0.000000, 0.000000)
+                particle.ZOffset = -1.100000023841858
+                particle.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
+                particle.Rate = 150
+                particle.VelocityInheritance = 0
+                particle.Rotation = NumberRange.new(-360.000000, 360.000000)
+                particle.ShapePartial = 1
+                particle.Texture = "rbxassetid://115257157082446"
+                particle.FlipbookMode = Enum.ParticleFlipbookMode.OneShot
+                particle.EmissionDirection = Enum.NormalId.Back
+                particle.FlipbookIncompatible = "Particle texture must be 1024 by 1024 to use flipbooks."
+                particle.Shape = Enum.ParticleEmitterShape.Box
+                particle.LightEmission = 0
+
+                particle.Parent = parent
+                table.insert(particles, particle)
+            end
+        
+            do
+                local particle = Instance.new("ParticleEmitter")
+                local parent = effectPart
+                        particle.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
+                particle.FlipbookFramerate = NumberRange.new(-60.000000, -60.000000)
+                particle.LightInfluence = 0
+                particle.Lifetime = NumberRange.new(0.250000, 0.250000)
+                particle.FlipbookLayout = Enum.ParticleFlipbookLayout.Grid4x4
+                particle.SpreadAngle = Vector2.new(5.000000, 5.000000)
+                particle.LockedToPart = true
+                particle.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0.000000, 0.000000), NumberSequenceKeypoint.new(1.000000, 0.000000)})
+                particle.Orientation = Enum.ParticleOrientation.FacingCamera
+                particle.Color = ColorSequence.new({ColorSequenceKeypoint.new(0.000000, Color3.new(0.431373, 1.000000, 0.400000)), ColorSequenceKeypoint.new(1.000000, Color3.new(0.431373, 1.000000, 0.400000))})
+                particle.Drag = 2
+                particle.FlipbookStartRandom = false
+                particle.TimeScale = 1
+                particle.VelocitySpread = 5
+                particle.Squash = NumberSequence.new({NumberSequenceKeypoint.new(0.000000, 0.000000), NumberSequenceKeypoint.new(1.000000, 0.000000)})
+                particle.Speed = NumberRange.new(15.000000, 56.000000)
+                particle.Brightness = 10
+                particle.Size = NumberSequence.new({NumberSequenceKeypoint.new(0.000000, 1.055900), NumberSequenceKeypoint.new(1.000000, 5.944448)})
+                particle.Enabled = false
+                particle.Acceleration = Vector3.new(0.000000, 0.000000, 0.000000)
+                particle.RotSpeed = NumberRange.new(0.000000, 0.000000)
+                particle.ZOffset = 1.100000023841858
+                particle.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
+                particle.Rate = 15
+                particle.VelocityInheritance = 0
+                particle.Rotation = NumberRange.new(-360.000000, 360.000000)
+                particle.ShapePartial = 1
+                particle.Texture = "rbxassetid://13013256540"
+                particle.FlipbookMode = Enum.ParticleFlipbookMode.OneShot
+                particle.EmissionDirection = Enum.NormalId.Back
+                particle.FlipbookIncompatible = "Particle texture must be 1024 by 1024 to use flipbooks."
+                particle.Shape = Enum.ParticleEmitterShape.Disc
+                particle.LightEmission = 0
+
+                particle.Parent = parent
+                table.insert(particles, particle)
+            end
+        
+            do
+                local particle = Instance.new("ParticleEmitter")
+                local parent = effectPart
+                        particle.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
+                particle.FlipbookFramerate = NumberRange.new(1.440000, 1.440000)
+                particle.LightInfluence = 0
+                particle.Lifetime = NumberRange.new(0.300000, 0.300000)
+                particle.FlipbookLayout = Enum.ParticleFlipbookLayout.Grid4x4
+                particle.SpreadAngle = Vector2.new(75.000000, 75.000000)
+                particle.LockedToPart = false
+                particle.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0.000000, 1.000000), NumberSequenceKeypoint.new(0.205207, 0.000000), NumberSequenceKeypoint.new(1.000000, 1.000000)})
+                particle.Orientation = Enum.ParticleOrientation.VelocityParallel
+                particle.Color = ColorSequence.new({ColorSequenceKeypoint.new(0.000000, Color3.new(0.435294, 1.000000, 0.403922)), ColorSequenceKeypoint.new(1.000000, Color3.new(0.435294, 1.000000, 0.403922))})
+                particle.Drag = 3
+                particle.FlipbookStartRandom = false
+                particle.TimeScale = 1
+                particle.VelocitySpread = 75
+                particle.Squash = NumberSequence.new({NumberSequenceKeypoint.new(0.000000, -1.000000), NumberSequenceKeypoint.new(1.000000, -1.000000)})
+                particle.Speed = NumberRange.new(25.000000, 85.000000)
+                particle.Brightness = 6
+                particle.Size = NumberSequence.new({NumberSequenceKeypoint.new(0.000000, 3.000000), NumberSequenceKeypoint.new(1.000000, 3.000000)})
+                particle.Enabled = false
+                particle.Acceleration = Vector3.new(0.000000, 0.000000, 0.000000)
+                particle.RotSpeed = NumberRange.new(0.000000, 0.000000)
+                particle.ZOffset = -0.10000000149011612
+                particle.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
+                particle.Rate = 55
+                particle.VelocityInheritance = 0
+                particle.Rotation = NumberRange.new(0.000000, 0.000000)
+                particle.ShapePartial = 1
+                particle.Texture = "rbxassetid://15540697602"
+                particle.FlipbookMode = Enum.ParticleFlipbookMode.OneShot
+                particle.EmissionDirection = Enum.NormalId.Back
+                particle.FlipbookIncompatible = "Particle texture must be 1024 by 1024 to use flipbooks."
+                particle.Shape = Enum.ParticleEmitterShape.Disc
+                particle.LightEmission = 0
+
+                particle.Parent = parent
+                table.insert(particles, particle)
+            end
+        
+            do
+                local particle = Instance.new("ParticleEmitter")
+                local parent = effectPart
+                        particle.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
+                particle.FlipbookFramerate = NumberRange.new(1.000000, 1.000000)
+                particle.LightInfluence = 0
+                particle.Lifetime = NumberRange.new(0.150000, 0.150000)
+                particle.FlipbookLayout = Enum.ParticleFlipbookLayout.Grid4x4
+                particle.SpreadAngle = Vector2.new(20.000000, 20.000000)
+                particle.LockedToPart = true
+                particle.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0.000000, 1.000000), NumberSequenceKeypoint.new(0.300153, 0.658385), NumberSequenceKeypoint.new(1.000000, 1.000000)})
+                particle.Orientation = Enum.ParticleOrientation.FacingCamera
+                particle.Color = ColorSequence.new({ 
+    ColorSequenceKeypoint.new(0, Color3.new(0, 0.5, 1)), 
+    ColorSequenceKeypoint.new(1, Color3.new(0, 0.5, 1)) 
+})
+                particle.Drag = 3
+                particle.FlipbookStartRandom = false
+                particle.TimeScale = 1
+                particle.VelocitySpread = 0
+                particle.Squash = NumberSequence.new({NumberSequenceKeypoint.new(0.000000, 0.000000), NumberSequenceKeypoint.new(1.000000, 0.188000)})
+                particle.Speed = NumberRange.new(1.000000, 125.000000)
+                particle.Brightness = 500
+                particle.Size = NumberSequence.new({NumberSequenceKeypoint.new(0.000000, 4.649416), NumberSequenceKeypoint.new(1.000000, 11.828071)})
+                particle.Enabled = false
+                particle.Acceleration = Vector3.new(0.000000, 0.000000, 0.000000)
+                particle.RotSpeed = NumberRange.new(-125.000000, 125.000000)
+                particle.ZOffset = 1
+                particle.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
+                particle.Rate = 25
+                particle.VelocityInheritance = 0
+                particle.Rotation = NumberRange.new(-360.000000, 360.000000)
+                particle.ShapePartial = 2
+                particle.Texture = "rbxassetid://15819432887"
+                particle.FlipbookMode = Enum.ParticleFlipbookMode.OneShot
+                particle.EmissionDirection = Enum.NormalId.Back
+                particle.FlipbookIncompatible = "Particle texture must be 1024 by 1024 to use flipbooks."
+                particle.Shape = Enum.ParticleEmitterShape.Disc
+                particle.LightEmission = 0
+
+                particle.Parent = parent
+                table.insert(particles, particle)
+            end
+        
+            do
+                local particle = Instance.new("ParticleEmitter")
+                local parent = effectPart
+                        particle.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
+                particle.FlipbookFramerate = NumberRange.new(1.000000, 1.000000)
+                particle.LightInfluence = 0
+                particle.Lifetime = NumberRange.new(0.500000, 0.500000)
+                particle.FlipbookLayout = Enum.ParticleFlipbookLayout.Grid8x8
+                particle.SpreadAngle = Vector2.new(16.000000, 16.000000)
+                particle.LockedToPart = true
+                particle.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0.000000, 1.000000), NumberSequenceKeypoint.new(0.399694, 0.527950), NumberSequenceKeypoint.new(1.000000, 1.000000)})
+                particle.Orientation = Enum.ParticleOrientation.FacingCamera
+                particle.Color = ColorSequence.new({ 
+    ColorSequenceKeypoint.new(0, Color3.new(0, 0.5, 1)), 
+    ColorSequenceKeypoint.new(1, Color3.new(0, 0.5, 1)) 
+})
+                particle.Drag = 3
+                particle.FlipbookStartRandom = false
+                particle.TimeScale = 1
+                particle.VelocitySpread = 0
+                particle.Squash = NumberSequence.new({NumberSequenceKeypoint.new(0.000000, 0.000000), NumberSequenceKeypoint.new(1.000000, 0.188000)})
+                particle.Speed = NumberRange.new(12.000000, 60.000000)
+                particle.Brightness = 300
+                particle.Size = NumberSequence.new({NumberSequenceKeypoint.new(0.000000, 4.347826), NumberSequenceKeypoint.new(1.000000, 6.335404)})
+                particle.Enabled = false
+                particle.Acceleration = Vector3.new(0.000000, 0.000000, 0.000000)
+                particle.RotSpeed = NumberRange.new(0.000000, 0.000000)
+                particle.ZOffset = 1
+                particle.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
+                particle.Rate = 2000
+                particle.VelocityInheritance = 0
+                particle.Rotation = NumberRange.new(-360.000000, 360.000000)
+                particle.ShapePartial = 2
+                particle.Texture = "http://www.roblox.com/asset/?id=14727016281"
+                particle.FlipbookMode = Enum.ParticleFlipbookMode.OneShot
+                particle.EmissionDirection = Enum.NormalId.Back
+                particle.FlipbookIncompatible = "Particle texture must be 1024 by 1024 to use flipbooks."
+                particle.Shape = Enum.ParticleEmitterShape.Disc
+                particle.LightEmission = 1
+
+                particle.Parent = parent
+                table.insert(particles, particle)
+            end
+        
+            do
+                local particle = Instance.new("ParticleEmitter")
+                local parent = effectPart
+                        particle.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
+                particle.FlipbookFramerate = NumberRange.new(1.000000, 1.000000)
+                particle.LightInfluence = 0
+                particle.Lifetime = NumberRange.new(0.080000, 0.080000)
+                particle.FlipbookLayout = Enum.ParticleFlipbookLayout.None
+                particle.SpreadAngle = Vector2.new(5.000000, 5.000000)
+                particle.LockedToPart = true
+                particle.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0.000000, 0.536708), NumberSequenceKeypoint.new(1.000000, 1.000000)})
+                particle.Orientation = Enum.ParticleOrientation.VelocityPerpendicular
+                particle.Color = ColorSequence.new({ColorSequenceKeypoint.new(0.000000, Color3.new(0.450980, 1.000000, 0.329412)), ColorSequenceKeypoint.new(1.000000, Color3.new(0.450980, 1.000000, 0.329412))})
+                particle.Drag = 0
+                particle.FlipbookStartRandom = false
+                particle.TimeScale = 0.6000000238418579
+                particle.VelocitySpread = 0
+                particle.Squash = NumberSequence.new({NumberSequenceKeypoint.new(0.000000, 0.000000), NumberSequenceKeypoint.new(1.000000, 0.000000)})
+                particle.Speed = NumberRange.new(0.004500, 0.004500)
+                particle.Brightness = 3000
+                particle.Size = NumberSequence.new({NumberSequenceKeypoint.new(0.000000, 1.791933), NumberSequenceKeypoint.new(1.000000, 23.403389)})
+                particle.Enabled = false
+                particle.Acceleration = Vector3.new(0.000000, 0.000000, 0.000000)
+                particle.RotSpeed = NumberRange.new(0.000000, 0.000000)
+                particle.ZOffset = 0
+                particle.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
+                particle.Rate = 5000
+                particle.VelocityInheritance = 0
+                particle.Rotation = NumberRange.new(0.000000, 360.000000)
+                particle.ShapePartial = 1
+                particle.Texture = "rbxassetid://10357935135"
+                particle.FlipbookMode = Enum.ParticleFlipbookMode.Loop
+                particle.EmissionDirection = Enum.NormalId.Front
+                particle.FlipbookIncompatible = "Particle texture must be 1024 by 1024 to use flipbooks."
+                particle.Shape = Enum.ParticleEmitterShape.Box
+                particle.LightEmission = 0
+
+                particle.Parent = parent
+                table.insert(particles, particle)
+            end
+        
+        for _, particle in ipairs(particles) do
+            particle.Enabled = true
+        end
+
+        local maxLifetime = 0
+        for _, particle in ipairs(particles) do
+            maxLifetime = math.max(maxLifetime, particle.Lifetime.Max)
+        end
+
+        task.delay(maxLifetime * 0.3777, function()
+
+        for _, particle in ipairs(particles) do
+            particle.Enabled = false
+        end
+
+        task.wait(1)
+        effectPart:Destroy()
+    end)
+local args = {
+    [1] = 130.499500108882785,
+}
+
+game:GetService("ReplicatedStorage").Packages.Knit.Services.BallService.RE.Shoot:FireServer(unpack(args))
+
+end
+
+
+        -- Cooldown UI handling
+        local cooldownFrame = button:FindFirstChild("Cooldown")
+        local tween = TweenService:Create(cooldownFrame.UIGradient, tweenInfo, { Offset = Vector2.new(0, 1) })
+
+        cooldownFrame.UIGradient.Offset = Vector2.new(0, 0)
+        tween:Play()
+        tween.Completed:Connect(function()
+            isCooldown = false
+            print("Cooldown finished.")
+        end)
+
+        print("Cooldown started.")
+
+    end
+
+    -- Customize the button
+    button.Name = buttonName
+    button.Parent = player.PlayerGui.InGameUI.Bottom.Abilities
+    button.LayoutOrder = buttonPosition
+    button.Keybind.Text = abilityKey.Name
+    button.Timer.Text = abilityName
+    button.ActualTimer.Text = ""
+
+    -- Connect ability activation events
+    button.Activated:Connect(triggerAbility)
+    UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if not gameProcessed and input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == abilityKey then
+            triggerAbility()
+        end
+    end)
+
+end
+
+initializeAbility()
+
+
+
+
+local player = game.Players.LocalPlayer
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local Debris = game:GetService("Debris") -- Add Debris service
+
+local cooldownTime = 10
+local abilityKey = Enum.KeyCode.Z
+local buttonName = "BrazilianZalaButton"
+local abilityName = "Loki Swing"
+local buttonPosition = -3
+
+local isCooldown = false
+local lastAbilityTime = 0
+local cooldownDuration = cooldownTime
+local tweenInfo = TweenInfo.new(cooldownTime, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut, 0, false, 0)
+
+local function initializeAbility()
+    local button = player.PlayerGui.InGameUI.Bottom.Abilities["1"]:Clone()
+
+    local function triggerAbility()
+        if isCooldown then return end
+
+        local currentTime = tick()
+        if currentTime - lastAbilityTime < cooldownDuration then
+            return
+        end
+
+        lastAbilityTime = currentTime
+        isCooldown = true
+
+        local function playAnimationAndEffects()
+            local character = player.Character or player.CharacterAdded:Wait()
+            if not character or not character:FindFirstChild("Football") then
+                return
+            end
+
+            local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
+
+            -- Load and duplicate aura effect 7 times
+            local vfxAssets = {}
+            for i = 1, 7 do
+                local vfx = game:GetObjects("rbxassetid://12256213367")[1]
+                for _, v in pairs(vfx:GetDescendants()) do
+                    if v:IsA("ParticleEmitter") then
+                        local clone = v:Clone()
+                        clone.Parent = humanoidRootPart
+                        table.insert(vfxAssets, clone)
+                    end
+                end
+            end
+
+            local animationId = "18668827116"
+            local humanoid = character:WaitForChild("Humanoid")
+            local animation = Instance.new("Animation")
+            animation.AnimationId = "rbxassetid://" .. animationId
+            local animator = humanoid:FindFirstChildOfClass("Animator") or Instance.new("Animator", humanoid)
+            local animationTrack = animator:LoadAnimation(animation)
+
+            for _, track in pairs(animator:GetPlayingAnimationTracks()) do
+                if track.Animation.AnimationId == animation.AnimationId then
+                    track:Stop()
+                end
+            end
+
+            animationTrack.Priority = Enum.AnimationPriority.Action4
+            animationTrack:Play()
+            animationTrack:AdjustSpeed(0.2)
+
+            local sound = Instance.new("Sound")
+            sound.SoundId = "rbxassetid://97930216597567"
+            sound.Pitch = 1
+            sound.Volume = 5
+            sound.Parent = character
+            sound:Play()
+
+            wait(0.7)
+            animationTrack:AdjustSpeed(1)
+
+            local args = { [1] = 100 }
+            ReplicatedStorage.Packages.Knit.Services.BallService.RE.Shoot:FireServer(unpack(args))
+
+            local args = { [1] = true }
+            ReplicatedStorage.Packages.Knit.Services.BallService.RE.HasShot:FireServer(unpack(args))
+
+            animationTrack.Stopped:Connect(function()
+                for _, vfx in pairs(vfxAssets) do
+                    if vfx then
+                        vfx:Destroy()
+                    end
+                end
+            end)
+
+            task.wait(0.2777)
+
+            local Ball = workspace.Football
+
+            local function Bezier(p0, p1, p2, p3, t)
+                local u = 1 - t
+                return u^3 * p0 + 3 * u^2 * t * p1 + 3 * u * t^2 * p2 + t^3 * p3
+            end
+
+            local function LaunchBall()
+                local startPos = Ball.Position
+                local lookVector = humanoidRootPart.CFrame.LookVector
+                local rightVector = humanoidRootPart.CFrame.RightVector
+
+                local randomDirection = math.random(0, 1) == 0 and 32.888 or -32.888
+                local endPos = startPos + lookVector * 95.888
+                local controlPos1 = startPos + lookVector * 37.0777 + rightVector * randomDirection + Vector3.new(0, 30.0777, 0)
+                local controlPos2 = startPos + lookVector * 37.0777 - rightVector * randomDirection + Vector3.new(0, 30.0777, 0)
+
+                local duration = 1.1888
+                local elapsed = 0
+
+                local conn
+                conn = RunService.RenderStepped:Connect(function(dt)
+                    elapsed = math.min(elapsed + dt, duration)
+                    local t = elapsed / duration
+                    Ball.Position = Vector3.new(
+                        Bezier(startPos.X, controlPos1.X, controlPos2.X, endPos.X, t),
+                        Bezier(startPos.Y, controlPos1.Y, controlPos2.Y, endPos.Y, t),
+                        Bezier(startPos.Z, controlPos1.Z, controlPos2.Z, endPos.Z, t)
+                    )
+
+                    if elapsed >= duration then
+                        conn:Disconnect()
+                    end
+                end)
+            end
+
+            LaunchBall()
+            wait(1.886)
+            sound:Destroy()
+        end
+
+        playAnimationAndEffects()
+
+        local cooldownFrame = button:FindFirstChild("Cooldown")
+        local tween = TweenService:Create(cooldownFrame.UIGradient, tweenInfo, { Offset = Vector2.new(0, 1) })
+
+        cooldownFrame.UIGradient.Offset = Vector2.new(0, 0)
+        tween:Play()
+        tween.Completed:Connect(function()
+            isCooldown = false
+            print("Cooldown finished.")
+        end)
+
+        print("Cooldown started.")
+    end
+
+    button.Name = buttonName
+    button.Parent = player.PlayerGui.InGameUI.Bottom.Abilities
+    button.LayoutOrder = buttonPosition
+    button.Keybind.Text = abilityKey.Name
+    button.Timer.Text = abilityName
+    button.ActualTimer.Text = ""
+
+    button.Activated:Connect(triggerAbility)
+    UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if not gameProcessed and input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == abilityKey then
+            triggerAbility()
+        end
+    end)
+end
+
+initializeAbility()
+
+
+
+
+local player = game.Players.LocalPlayer
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+local cooldownTime = 4  -- Cooldown time (in seconds)
+local abilityKey = Enum.KeyCode.J  -- Key to activate ability
+local buttonName = "BrazilianZalaButton"  -- Name for the ability button
+local abilityName = "Lokis Feint"  -- Name of the ability
+local buttonPosition = -3  -- Position in the layout (can be adjusted)
+
+local isCooldown = false
+local lastAbilityTime = 0
+local cooldownDuration = cooldownTime  -- Cooldown duration (in seconds)
+local tweenInfo = TweenInfo.new(cooldownTime, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut, 0, false, 0)
+
+-- Initialize ability button and setup
+local function initializeAbility()
+    local button = player.PlayerGui.InGameUI.Bottom.Abilities["1"]:Clone()
+
+    -- Trigger ability logic
+    local function triggerAbility()
+        if isCooldown then return end
+
+        local currentTime = tick()
+        if currentTime - lastAbilityTime < cooldownDuration then
+            return
+        end
+
+        lastAbilityTime = currentTime
+        isCooldown = true
+    
+
+local player = game.Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoid = character:WaitForChild("Humanoid")
+
+-- Animation setup
+local animation = Instance.new("Animation")
+animation.AnimationId = "rbxassetid://86021228880765"
+
+local animator = humanoid:FindFirstChild("Animator") or Instance.new("Animator", humanoid)
+local track = animator:LoadAnimation(animation)
+
+track.Priority = Enum.AnimationPriority.Action4
+track:Play()
+
+-- Wait 0.5 seconds before applying effects
+task.wait(0.5)
+game:GetService("ReplicatedStorage").Packages.Knit.Services.BallService.RE.Dribble:FireServer()
+
+-- Highlight character yellow
+local highlight = Instance.new("Highlight")
+highlight.Parent = character
+highlight.FillColor = Color3.fromRGB(255, 255, 0) -- Yellow
+highlight.OutlineTransparency = 1
+
+-- Pop-up text effect near right arm at the same time the highlight shows up
+local rightArm = character:FindFirstChild("Right Arm") or character:FindFirstChild("RightHand")
+if rightArm then
+    local billboard = Instance.new("BillboardGui")
+    billboard.Parent = character
+    billboard.Adornee = rightArm
+    billboard.Size = UDim2.new(5, 0, 2, 0)
+    billboard.StudsOffset = Vector3.new(3.5, 1, 0) -- Offset to the right
+    billboard.AlwaysOnTop = true
+
+    local textLabel = Instance.new("TextLabel")
+    textLabel.Parent = billboard
+    textLabel.Size = UDim2.new(2, 0, 2, 0)
+    textLabel.BackgroundTransparency = 1
+    textLabel.Text = "Fake!"
+    textLabel.TextColor3 = Color3.fromRGB(255, 255, 0) -- Yellow text
+    textLabel.Font = Enum.Font.Kalam
+    textLabel.TextScaled = true
+
+    -- Black outline for the text
+    textLabel.TextStrokeTransparency = 0 -- Adjust for outline thickness
+    textLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0) -- Black outline
+
+    -- Tween for size animation (grow, shrink, disappear)
+    local tweenService = game:GetService("TweenService")
+
+    local growTween = tweenService:Create(textLabel, TweenInfo.new(0.8, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {Size = UDim2.new(4.7, 0, 4.7, 0)})
+    local shrinkTween = tweenService:Create(textLabel, TweenInfo.new(0.4, Enum.EasingStyle.Cubic, Enum.EasingDirection.In), {Size = UDim2.new(0.5, 0, 0.5, 0), TextTransparency = 1})
+
+    growTween:Play()
+    shrinkTween:Play()  -- Start shrinking immediately after growing starts
+
+    shrinkTween.Completed:Connect(function()
+        billboard:Destroy()
+    end)
+end
+
+-- Remove yellow highlight after 0.5s
+task.wait(0.5)
+highlight:Destroy() -- Remove highlight
+
+
+local redHighlight = Instance.new("Highlight")
+redHighlight.Parent = character
+redHighlight.FillColor = Color3.fromRGB(255, 0, 0) -- Red
+redHighlight.OutlineTransparency = 1
+
+-- Pop-up "Shoot!" text near right arm
+local rightArm = character:FindFirstChild("Right Arm") or character:FindFirstChild("RightHand")
+if rightArm then
+    local billboard = Instance.new("BillboardGui")
+    billboard.Parent = character
+    billboard.Adornee = rightArm
+    billboard.Size = UDim2.new(5, 0, 2, 0)
+    billboard.StudsOffset = Vector3.new(3.5, 1, 0) -- Offset to the right
+    billboard.AlwaysOnTop = true
+
+    local textLabel = Instance.new("TextLabel")
+    textLabel.Parent = billboard
+    textLabel.Size = UDim2.new(2, 0, 2, 0)
+    textLabel.BackgroundTransparency = 1
+    textLabel.Text = "Shoot!"
+    textLabel.TextColor3 = Color3.fromRGB(255, 0, 0) -- Red text
+    textLabel.Font = Enum.Font.Kalam
+    textLabel.TextScaled = true
+
+    -- Black outline for the text
+    textLabel.TextStrokeTransparency = 0 -- Adjust for outline thickness
+    textLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0) -- Black outline
+
+    -- Tween for size animation (grow, shrink, disappear)
+    local tweenService = game:GetService("TweenService")
+
+    local growTween = tweenService:Create(textLabel, TweenInfo.new(0.8, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {Size = UDim2.new(4.7, 0, 4.7, 0)})
+    local shrinkTween = tweenService:Create(textLabel, TweenInfo.new(0.4, Enum.EasingStyle.Cubic, Enum.EasingDirection.In), {Size = UDim2.new(0.5, 0, 0.5, 0), TextTransparency = 1})
+
+    growTween:Play()
+    shrinkTween:Play()  -- Start shrinking immediately after growing starts
+
+    shrinkTween.Completed:Connect(function()
+        billboard:Destroy()
+        redHighlight:Destroy() -- Remove the red highlight after the text disappears
+    end)
+end
+
+-- Remove red highlight after 0.4s
+task.wait(0.2)
+
+
+local vfx = game:GetObjects("rbxassetid://18516580937")[1]
+local bodyPartName = "HumanoidRootPart" -- Change this to the desired body part
+local duration = 0.7 -- Effect duration in seconds
+local fadeOutTime = 1 -- Time it takes to fade out
+local sizeMultiplier = 2 -- Scale the particle size (1 = default)
+local newColor = Color3.fromRGB(255, 255, 255) -- Change this to any color
+local minTransparency = 0.8
+local maxTransparency = 1
+
+local character = game.Players.LocalPlayer.Character
+if character and character:FindFirstChild(bodyPartName) then
+    local targetPart = character[bodyPartName]
+
+    for _, v in pairs(vfx:GetDescendants()) do
+        if v:IsA("ParticleEmitter") then
+            local clone = v:Clone()
+            clone.Parent = targetPart
+
+            -- Scale particle size
+            if sizeMultiplier ~= 1 then
+                local function newSize(seq)
+                    local newKeypoints = {}
+                    for _, kp in ipairs(seq.Keypoints) do
+                        table.insert(newKeypoints, NumberSequenceKeypoint.new(kp.Time, kp.Value * sizeMultiplier))
+                    end
+                    return NumberSequence.new(newKeypoints)
+                end
+                clone.Size = newSize(clone.Size)
+            end
+
+            -- Change color
+            clone.Color = ColorSequence.new(newColor)
+
+            -- Set transparency range
+            local transparencySeq = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, minTransparency),
+                NumberSequenceKeypoint.new(1, maxTransparency)
+            })
+            clone.Transparency = transparencySeq
+
+            -- Fade out effect
+            task.delay(duration, function()
+                local startRate = clone.Rate
+                local startTime = tick()
+
+                while tick() - startTime < fadeOutTime do
+                    local progress = (tick() - startTime) / fadeOutTime
+                    clone.Rate = startRate * (1 - progress) -- Decrease rate over time
+                    clone.Transparency = NumberSequence.new({
+                        NumberSequenceKeypoint.new(0, minTransparency + (maxTransparency - minTransparency) * progress),
+                        NumberSequenceKeypoint.new(1, maxTransparency)
+                    })
+                    task.wait() -- Smoothly update
+                end
+
+                clone.Enabled = false -- Disable emission
+                task.wait(2) -- Extra delay before removing
+                clone:Destroy()
+            end)
+        end
+    end
+end
+
+
+
+
+wait(0.3)
+local args = {
+    [1] = 180,
+}
+
+game:GetService("ReplicatedStorage").Packages.Knit.Services.BallService.RE.Shoot:FireServer(unpack(args))
+
+wait(0.4)
+redHighlight:Destroy() -- Remove red highlight
+        -- Cooldown UI handling
+        local cooldownFrame = button:FindFirstChild("Cooldown")
+        local tween = TweenService:Create(cooldownFrame.UIGradient, tweenInfo, { Offset = Vector2.new(0, 1) })
+
+        cooldownFrame.UIGradient.Offset = Vector2.new(0, 0)
+        tween:Play()
+        tween.Completed:Connect(function()
+            isCooldown = false
+            print("Cooldown finished.")
+        end)
+
+        print("Cooldown started.")
+
+    end
+
+    -- Customize the button
+    button.Name = buttonName
+    button.Parent = player.PlayerGui.InGameUI.Bottom.Abilities
+    button.LayoutOrder = buttonPosition
+    button.Keybind.Text = abilityKey.Name
+    button.Timer.Text = abilityName
+    button.ActualTimer.Text = ""
+
+    -- Connect ability activation events
+    button.Activated:Connect(triggerAbility)
+    UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if not gameProcessed and input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == abilityKey then
+            triggerAbility()
+        end
+    end)
+
+end
+
+initializeAbility()
