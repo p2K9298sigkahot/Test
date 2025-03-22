@@ -1,0 +1,1094 @@
+-- move 1
+local player = game.Players.LocalPlayer
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Debris = game:GetService("Debris")
+
+-- Load Knit and StatesController for speed boost
+local Knit = require(game:GetService("ReplicatedStorage").Packages.Knit)
+local StatesController = Knit.GetController("StatesController")
+
+-- **Cleanup Function**: Removes previous ability buttons and text GUIs to prevent duplicates
+local function cleanup()
+    for _, buttonName in ipairs({
+        "LightspeedButton"
+    }) do
+        local button = player.PlayerGui.InGameUI.Bottom.Abilities:FindFirstChild(buttonName)
+        if button then
+            button:Destroy()
+        end
+    end
+    if player.PlayerGui:FindFirstChild("AbilityTextGui") then
+        player.PlayerGui.AbilityTextGui:Destroy()
+    end
+    if player.PlayerGui:FindFirstChild("SubtitleGui") then
+        player.PlayerGui.SubtitleGui:Destroy()
+    end
+end
+
+-- **Camera Shake Function**: Adds a visual shake effect, works on both PC and mobile
+local function shakeCamera(intensity, duration)
+    local camera = workspace.CurrentCamera
+    local originalCFrame = camera.CFrame
+    local elapsed = 0
+    local heartbeat = RunService.Heartbeat
+    local connection
+    connection = heartbeat:Connect(function(dt)
+        elapsed = elapsed + dt
+        if elapsed < duration then
+            local shakeOffset = CFrame.new(
+                math.random(-intensity, intensity)/100,
+                math.random(-intensity, intensity)/100,
+                0
+            )
+            camera.CFrame = originalCFrame * shakeOffset
+        else
+            camera.CFrame = originalCFrame
+            connection:Disconnect()
+        end
+    end)
+end
+
+-- **Display Subtitle**: Shows a subtitle on the screen
+local function displaySubtitle(text, duration)
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "SubtitleGui"
+    screenGui.Parent = player.PlayerGui
+    local textLabel = Instance.new("TextLabel")
+    textLabel.Name = "SubtitleLabel"
+    textLabel.Text = text
+    textLabel.Size = UDim2.new(0.8, 0, 0.05, 0) -- Relative size scales with screen
+    textLabel.Position = UDim2.new(0.1, 0, 0.75, 0) -- Adjusted position to move it higher
+    textLabel.TextScaled = true -- Ensures text fits on all screen sizes
+    textLabel.BackgroundTransparency = 1
+    textLabel.TextColor3 = Color3.new(0, 1, 1) -- Cyan color
+    textLabel.Font = Enum.Font.GothamBlack
+    textLabel.TextStrokeTransparency = 0.3
+    textLabel.Parent = screenGui
+    Debris:AddItem(screenGui, duration)
+end
+
+-- **Display Overhead Text**: Shows a text above the player's head
+local function displayOverheadText(character, text, duration)
+    local billboardGui = Instance.new("BillboardGui")
+    billboardGui.Name = "OverheadText"
+    billboardGui.Size = UDim2.new(4, 0, 1, 0)
+    billboardGui.StudsOffset = Vector3.new(0, 3, 0)
+    billboardGui.Adornee = character:WaitForChild("Head")
+    billboardGui.Parent = character
+
+    local textLabel = Instance.new("TextLabel")
+    textLabel.Text = text
+    textLabel.Size = UDim2.new(1, 0, 1, 0)
+    textLabel.BackgroundTransparency = 1
+    textLabel.TextColor3 = Color3.new(0, 1, 1) -- Cyan color
+    textLabel.Font = Enum.Font.GothamBlack
+    textLabel.TextScaled = true
+    textLabel.Parent = billboardGui
+
+    Debris:AddItem(billboardGui, duration)
+end
+
+-- **Initialize Abilities**: Sets up all abilities and UI elements
+local function initializeAbility()
+    local character = player.Character or player.CharacterAdded:Wait()
+    local humanoid = character:WaitForChild("Humanoid")
+    local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
+
+    -- Load animations and sounds
+    local animation1 = Instance.new("Animation")
+    animation1.AnimationId = "rbxassetid://99916870664377"
+    local animationTrack1 = humanoid:LoadAnimation(animation1)
+
+    local sound1 = Instance.new("Sound")
+    sound1.SoundId = "rbxassetid://4909206080"
+    sound1.Volume = 5
+    sound1.Parent = humanoidRootPart
+
+    local visualEffect = Instance.new("ParticleEmitter")
+    visualEffect.Texture = "rbxassetid://107877955127835"
+    visualEffect.Color = ColorSequence.new(Color3.new(1, 0, 0))
+    visualEffect.Lifetime = NumberRange.new(0.5, 1)
+    visualEffect.Rate = 100
+    visualEffect.Speed = NumberRange.new(20, 30)
+    visualEffect.Size = NumberSequence.new(2, 3)
+    visualEffect.Transparency = NumberSequence.new(0, 0.5)
+    visualEffect.Enabled = false
+    visualEffect.Parent = humanoidRootPart
+
+    local coolEffect = Instance.new("ParticleEmitter")
+    coolEffect.Texture = "rbxassetid://107877955127835"
+    coolEffect.Color = ColorSequence.new(Color3.new(0, 1, 1))
+    coolEffect.Lifetime = NumberRange.new(0.5, 1.5)
+    coolEffect.Rate = 50
+    coolEffect.Speed = NumberRange.new(15, 25)
+    coolEffect.Size = NumberSequence.new(3, 4)
+    coolEffect.Transparency = NumberSequence.new(0, 0.7)
+    coolEffect.Enabled = false
+    coolEffect.Parent = humanoidRootPart
+
+    -- Load aura VFX
+    local vfx = game:GetObjects("rbxassetid://106192507657319")[1]
+    local particleEmitters = {}
+    for _, v in pairs(vfx:GetDescendants()) do
+        if v:IsA("ParticleEmitter") then
+            for i = 1, 3 do -- Duplicate each particle emitter 3 times
+                local emitterClone = v:Clone()
+                table.insert(particleEmitters, emitterClone)
+            end
+        end
+    end
+    
+    -- Preload the subtitle sound
+    local subtitleSound = Instance.new("Sound")
+    subtitleSound.SoundId = "rbxassetid://137874238230037"
+    subtitleSound.Volume = 5
+    subtitleSound.Parent = humanoidRootPart
+
+    --- **Ability 1: Lightspeed** ---
+    local function triggerLightspeed()
+        -- Play subtitle sound and display subtitle
+        subtitleSound:Play()
+        displaySubtitle("You Got Good Foresight, But I'm Fast.", 2)
+        displayOverheadText(character, "Speed!", 2)
+        
+        -- Delay the start of the ability to allow the subtitle to show
+        wait(2)
+        
+        -- Start the ability
+        animationTrack1:Play()
+        animationTrack1:AdjustSpeed(1.5)
+        local zigzagDuration = 0.09
+        local zigzagDistance = 9
+        visualEffect.Enabled = true
+        coolEffect.Enabled = true
+
+        -- Enable aura VFX
+        for _, emitter in pairs(particleEmitters) do
+            emitter.Enabled = true
+            emitter.Parent = humanoidRootPart
+        end
+
+        local segments = 10
+        local function playZigzagTweens(count)
+            if count > segments then
+                visualEffect.Enabled = false
+                coolEffect.Enabled = false
+
+                -- Disable aura VFX
+                for _, emitter in pairs(particleEmitters) do
+                    emitter.Enabled = false
+                end
+
+                return
+            end
+            local currentPos = humanoidRootPart.Position
+            local direction = (count % 2 == 1) and 1 or -1
+            local forwardVector = humanoidRootPart.CFrame.LookVector
+            local rightVector = humanoidRootPart.CFrame.RightVector
+            local targetPosition = currentPos + (forwardVector * zigzagDistance + direction * rightVector * zigzagDistance)
+            local targetCFrame = CFrame.new(targetPosition, targetPosition + forwardVector)
+            local tweenInfo = TweenInfo.new(zigzagDuration, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut)
+            local tween = TweenService:Create(humanoidRootPart, tweenInfo, {CFrame = targetCFrame})
+            local s = sound1:Clone()
+            s.Parent = humanoidRootPart
+            s:Play()
+            Debris:AddItem(s, s.TimeLength)
+            tween:Play()
+            tween.Completed:Connect(function()
+                playZigzagTweens(count + 1)
+            end)
+        end
+        playZigzagTweens(1)
+    end
+
+    -- **GUI Button Creation**: Sets up buttons for all abilities
+    local bottomAbilities = player.PlayerGui.InGameUI.Bottom.Abilities
+
+    local btnLightspeed = bottomAbilities["1"]:Clone()
+    btnLightspeed.Name = "LightspeedButton"
+    btnLightspeed.Parent = bottomAbilities
+    btnLightspeed.LayoutOrder = -4
+    btnLightspeed.Keybind.Text = "Z"
+    btnLightspeed.Timer.Text = "Loki Lightspeed"
+    btnLightspeed.ActualTimer.Text = ""
+    btnLightspeed.Cooldown:Destroy()
+
+    -- **Hide Keybind Texts on Mobile**: Improves UI clarity on touch devices
+    if UserInputService.TouchEnabled then
+        for _, btn in pairs(bottomAbilities:GetChildren()) do
+            if btn:IsA("TextButton") and btn:FindFirstChild("Keybind") then
+                btn.Keybind.Visible = false
+            end
+        end
+    end
+
+    -- **Connect Button Activations**: Allows abilities to be triggered via GUI clicks
+    btnLightspeed.Activated:Connect(triggerLightspeed)
+
+    -- **Keyboard Input Handling**: Enables abilities on PC via keyboard
+    UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed then return end
+        if input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == Enum.KeyCode.Z then
+            triggerLightspeed()
+        end
+    end)
+end
+
+-- **Connect Character Added Event**: Reinitializes abilities on respawn
+player.CharacterAdded:Connect(function()
+    cleanup()
+    initializeAbility()
+end)
+
+-- Initial cleanup and setup
+cleanup()
+if player.Character then
+    initializeAbility()
+end
+
+
+
+
+
+
+
+-- move 2
+
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local player = game.Players.LocalPlayer
+local cooldownTime = 7  -- Cooldown time (in seconds)
+local abilityKey = Enum.KeyCode.B  -- Key to activate ability
+local buttonName = "a1717"  -- Name for the ability button
+local abilityName = "Loki Swing"  -- Name of the ability
+local buttonPosition = -5  -- Position in the layout (can be adjusted)
+
+local isCooldown = false
+local tweenInfo = TweenInfo.new(cooldownTime, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut, 0, false, 0)
+local lastAbilityTime = 0
+local cooldownDuration = 10
+
+local function playAnimationAndEffects()
+    local character = player.Character or player.CharacterAdded:Wait()
+    if not character or not character:FindFirstChild("Football") then
+        return
+    end
+
+    local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
+
+    -- Load and duplicate aura effect 7 times
+    local vfxAssets = {}
+    for i = 1, 7 do
+        local vfx = game:GetObjects("rbxassetid://12256213367")[1]
+        for _, v in pairs(vfx:GetDescendants()) do
+            if v:IsA("ParticleEmitter") then
+                local clone = v:Clone()
+                clone.Parent = humanoidRootPart
+                table.insert(vfxAssets, clone)
+            end
+        end
+    end
+
+    local animationId = "18668827116"
+    local humanoid = character:WaitForChild("Humanoid")
+    local animation = Instance.new("Animation")
+    animation.AnimationId = "rbxassetid://" .. animationId
+    local animator = humanoid:FindFirstChildOfClass("Animator") or Instance.new("Animator", humanoid)
+    local animationTrack = animator:LoadAnimation(animation)
+
+    for _, track in pairs(animator:GetPlayingAnimationTracks()) do
+        if track.Animation.AnimationId == animation.AnimationId then
+            track:Stop()
+        end
+    end
+
+    animationTrack.Priority = Enum.AnimationPriority.Action4
+    animationTrack:Play()
+    animationTrack:AdjustSpeed(0.2)
+
+    local sound = Instance.new("Sound")
+    sound.SoundId = "rbxassetid://97930216597567"
+    sound.Pitch = 1
+    sound.Volume = 5
+    sound.Parent = character
+    sound:Play()
+
+    wait(0.7)
+    animationTrack:AdjustSpeed(1)
+
+    local args = { [1] = 100 }
+    ReplicatedStorage.Packages.Knit.Services.BallService.RE.Shoot:FireServer(unpack(args))
+
+    local args = { [1] = true }
+    ReplicatedStorage.Packages.Knit.Services.BallService.RE.HasShot:FireServer(unpack(args))
+
+    animationTrack.Stopped:Connect(function()
+        for _, vfx in pairs(vfxAssets) do
+            if vfx then
+                vfx:Destroy()
+            end
+        end
+    end)
+
+    task.wait(0.2777)
+
+    local RunService = game:GetService("RunService")
+    local Ball = workspace.Football
+
+    local function Bezier(p0, p1, p2, p3, t)
+        local u = 1 - t
+        return u^3 * p0 + 3 * u^2 * t * p1 + 3 * u * t^2 * p2 + t^3 * p3
+    end
+
+    local function LaunchBall()
+        local startPos = Ball.Position
+        local lookVector = humanoidRootPart.CFrame.LookVector
+        local rightVector = humanoidRootPart.CFrame.RightVector
+
+        local randomDirection = math.random(0, 1) == 0 and 32.888 or -32.888
+        local endPos = startPos + lookVector * 95.888
+        local controlPos1 = startPos + lookVector * 37.0777 + rightVector * randomDirection + Vector3.new(0, 30.0777, 0)
+        local controlPos2 = startPos + lookVector * 37.0777 - rightVector * randomDirection + Vector3.new(0, 30.0777, 0)
+
+        local duration = 1.1888
+        local elapsed = 0
+
+        local conn
+        conn = RunService.RenderStepped:Connect(function(dt)
+            elapsed = math.min(elapsed + dt, duration)
+            local t = elapsed / duration
+            Ball.Position = Vector3.new(
+                Bezier(startPos.X, controlPos1.X, controlPos2.X, endPos.X, t),
+                Bezier(startPos.Y, controlPos1.Y, controlPos2.Y, endPos.Y, t),
+                Bezier(startPos.Z, controlPos1.Z, controlPos2.Z, endPos.Z, t)
+            )
+
+            if elapsed >= duration then
+                conn:Disconnect()
+            end
+        end)
+    end
+
+    LaunchBall()
+    wait(1.886)
+    sound:Destroy()
+end
+
+-- Ability Button Initialization
+local function initializeAbility()
+    local abilitiesUI = player.PlayerGui:WaitForChild("InGameUI"):WaitForChild("Bottom"):WaitForChild("Abilities")
+
+    -- Check if button already exists
+    if abilitiesUI:FindFirstChild(buttonName) then
+        return
+    end
+
+    local button = abilitiesUI["1"]:Clone()
+    button.Name = buttonName
+    button.Parent = abilitiesUI
+    button.LayoutOrder = buttonPosition
+    button.Keybind.Text = abilityKey.Name
+    button.Timer.Text = abilityName
+    button.ActualTimer.Text = ""
+
+    local function triggerAbility()
+        if isCooldown then return end
+        local currentTime = tick()
+        if currentTime - lastAbilityTime < cooldownDuration then return end
+        lastAbilityTime = currentTime
+
+        playAnimationAndEffects()
+
+        local cooldownFrame = button:FindFirstChild("Cooldown")
+        local tween = TweenService:Create(cooldownFrame.UIGradient, tweenInfo, { Offset = Vector2.new(0, 1) })
+
+        isCooldown = true
+        cooldownFrame.UIGradient.Offset = Vector2.new(0, 0)
+        tween:Play()
+        tween.Completed:Connect(function()
+            isCooldown = false
+            print("Cooldown finished.")
+        end)
+        print("Cooldown started.")
+    end
+
+    -- Connect ability activation events
+    button.Activated:Connect(triggerAbility)
+
+    -- Ensure keybind doesn't stack multiple times
+    for _, conn in pairs(UserInputService.InputBegan:GetConnections()) do
+        if conn.Function == triggerAbility then
+            conn:Disconnect()
+        end
+    end
+
+    UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if not gameProcessed and input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == abilityKey then
+            triggerAbility()
+        end
+    end)
+end
+
+-- Ensure ability initializes only once
+if not player.Character or not player.Character.Parent then
+    player.CharacterAdded:Wait()
+end
+initializeAbility()
+
+player.CharacterAdded:Connect(initializeAbility)
+
+
+
+
+
+
+--move 3
+
+
+
+
+
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+
+local player = Players.LocalPlayer
+local cooldownTime = 4  -- Cooldown time in seconds
+local abilityKey = Enum.KeyCode.V  -- Default Key to activate ability
+local buttonName = "ShhButton"  -- Name for the ability button
+local abilityName = "Speed Trap"  -- Name of the ability
+local buttonPosition = -8  -- Position in the layout
+
+local isCooldown = false
+local lastAbilityTime = 0
+local cooldownDuration = 10
+local inputConnection
+
+-- Function to remove the old button and disconnect previous events
+local function cleanup()
+    local existingButton = player.PlayerGui:FindFirstChild("InGameUI") and
+        player.PlayerGui.InGameUI:FindFirstChild("Bottom") and
+        player.PlayerGui.InGameUI.Bottom:FindFirstChild("Abilities") and
+        player.PlayerGui.InGameUI.Bottom.Abilities:FindFirstChild(buttonName)
+
+    if existingButton then
+        existingButton:Destroy()
+    end
+
+    if inputConnection then
+        inputConnection:Disconnect()
+        inputConnection = nil
+    end
+end
+
+-- Function to ensure UI is fully loaded
+local function waitForUI()
+    if not player:FindFirstChild("PlayerGui") then
+        repeat wait() until player:FindFirstChild("PlayerGui")
+    end
+    player.PlayerGui:WaitForChild("InGameUI"):WaitForChild("Bottom"):WaitForChild("Abilities")
+end
+
+-- Function to play the ability VFX
+local function playAura()
+    local vfx = game:GetObjects("rbxassetid://12704915626")[1]
+    local character = player.Character
+    local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+
+    if rootPart then
+        for _, v in pairs(vfx:GetDescendants()) do
+            if v:IsA("ParticleEmitter") then
+                for i = 1, 16 do  -- Add multiple aura effects
+                    local auraClone = v:Clone()
+                    auraClone.Parent = rootPart
+                end
+            end
+        end
+    end
+end
+
+local function stopAura()
+    local character = player.Character
+    local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+
+    if rootPart then
+        for _, v in pairs(rootPart:GetChildren()) do
+            if v:IsA("ParticleEmitter") then
+                v:Destroy()
+            end
+        end
+    end
+end
+
+-- Function to handle movement
+local function tweenToPosition(offsetMultiplier, animationId, soundId)
+    local character = player.Character or player.CharacterAdded:Wait()
+    local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
+    local humanoid = character:WaitForChild("Humanoid")
+
+    local animation = Instance.new("Animation")
+    animation.AnimationId = animationId
+    local animationTrack = humanoid:LoadAnimation(animation)
+
+    local currentPosition = humanoidRootPart.Position
+    local offset = (humanoidRootPart.CFrame.LookVector + humanoidRootPart.CFrame.RightVector).unit * offsetMultiplier
+    local targetPosition = currentPosition + offset 
+
+    local tweenInfo = TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    local goal = {CFrame = CFrame.new(targetPosition)} 
+
+    local tween = TweenService:Create(humanoidRootPart, tweenInfo, goal)
+
+    animationTrack:Play()
+    playAura()
+
+    local sound = Instance.new("Sound")
+    sound.SoundId = soundId
+    sound.Parent = humanoidRootPart
+    sound:Play() 
+
+    tween:Play()
+    tween.Completed:Wait()
+    stopAura()
+end
+
+-- Function to activate the ability
+local function triggerAbility()
+    if isCooldown then return end
+
+    local currentTime = tick()
+    if currentTime - lastAbilityTime < cooldownDuration then
+        return
+    end
+
+    lastAbilityTime = currentTime
+    isCooldown = true
+
+    tweenToPosition(35, "rbxassetid://74760828875758", "rbxassetid://107991130416439") -- Move forward-right
+    tweenToPosition(30, "rbxassetid://104460260153279", "rbxassetid://91616529441627") -- Move forward
+
+    -- Handle cooldown visuals
+    local button = player.PlayerGui.InGameUI.Bottom.Abilities:FindFirstChild(buttonName)
+    if button then
+        local cooldownFrame = button:FindFirstChild("Cooldown")
+        if cooldownFrame and cooldownFrame:FindFirstChild("UIGradient") then
+            local tween = TweenService:Create(cooldownFrame.UIGradient, TweenInfo.new(cooldownTime), { Offset = Vector2.new(0, 1) })
+            cooldownFrame.UIGradient.Offset = Vector2.new(0, 0)
+            tween:Play()
+            tween.Completed:Connect(function()
+                isCooldown = false
+                print("Cooldown finished.")
+            end)
+        end
+    end
+    print("Cooldown started.")
+end
+
+-- Function to initialize the ability UI and controls
+local function initializeAbility()
+    waitForUI()
+    cleanup()
+
+    local abilitiesFrame = player.PlayerGui.InGameUI.Bottom.Abilities
+    local buttonTemplate = abilitiesFrame:FindFirstChild("1")
+    if not buttonTemplate then
+        warn("Ability button template not found!")
+        return
+    end
+
+    local button = buttonTemplate:Clone()
+    button.Name = buttonName
+    button.Parent = abilitiesFrame
+    button.LayoutOrder = buttonPosition
+    button.Keybind.Text = abilityKey.Name
+    button.Timer.Text = abilityName
+    button.ActualTimer.Text = ""
+
+    button.Activated:Connect(triggerAbility)
+
+    -- Ensure keybinds work after returning
+    if inputConnection then inputConnection:Disconnect() end
+    inputConnection = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if not gameProcessed and input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == abilityKey then
+            triggerAbility()
+        end
+    end)
+end
+
+-- Ensure the ability is initialized when the player joins or respawns
+player.CharacterAdded:Connect(function()
+    wait(1)  -- Delay to ensure everything loads
+    initializeAbility()
+end)
+
+-- Initialize the ability button when the script runs
+initializeAbility
+
+
+
+
+
+
+
+--move 4
+
+
+
+
+
+
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local player = game.Players.LocalPlayer
+local cooldownTime = 7  -- Cooldown time (in seconds)
+local abilityKey = Enum.KeyCode.B  -- Key to activate ability
+local buttonName = "a1717"  -- Name for the ability button
+local abilityName = "Loki Swing"  -- Name of the ability
+local buttonPosition = -5  -- Position in the layout (can be adjusted)
+
+local isCooldown = false
+local tweenInfo = TweenInfo.new(cooldownTime, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut, 0, false, 0)
+local lastAbilityTime = 0
+local cooldownDuration = 10
+
+local function playAnimationAndEffects()
+    local character = player.Character or player.CharacterAdded:Wait()
+    if not character or not character:FindFirstChild("Football") then
+        return
+    end
+
+    local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
+
+    -- Load and duplicate aura effect 7 times
+    local vfxAssets = {}
+    for i = 1, 7 do
+        local vfx = game:GetObjects("rbxassetid://12256213367")[1]
+        for _, v in pairs(vfx:GetDescendants()) do
+            if v:IsA("ParticleEmitter") then
+                local clone = v:Clone()
+                clone.Parent = humanoidRootPart
+                table.insert(vfxAssets, clone)
+            end
+        end
+    end
+
+    local animationId = "18668827116"
+    local humanoid = character:WaitForChild("Humanoid")
+    local animation = Instance.new("Animation")
+    animation.AnimationId = "rbxassetid://" .. animationId
+    local animator = humanoid:FindFirstChildOfClass("Animator") or Instance.new("Animator", humanoid)
+    local animationTrack = animator:LoadAnimation(animation)
+
+    for _, track in pairs(animator:GetPlayingAnimationTracks()) do
+        if track.Animation.AnimationId == animation.AnimationId then
+            track:Stop()
+        end
+    end
+
+    animationTrack.Priority = Enum.AnimationPriority.Action4
+    animationTrack:Play()
+    animationTrack:AdjustSpeed(0.2)
+
+    local sound = Instance.new("Sound")
+    sound.SoundId = "rbxassetid://97930216597567"
+    sound.Pitch = 1
+    sound.Volume = 5
+    sound.Parent = character
+    sound:Play()
+
+    wait(0.7)
+    animationTrack:AdjustSpeed(1)
+
+    local args = { [1] = 100 }
+    ReplicatedStorage.Packages.Knit.Services.BallService.RE.Shoot:FireServer(unpack(args))
+
+    local args = { [1] = true }
+    ReplicatedStorage.Packages.Knit.Services.BallService.RE.HasShot:FireServer(unpack(args))
+
+    animationTrack.Stopped:Connect(function()
+        for _, vfx in pairs(vfxAssets) do
+            if vfx then
+                vfx:Destroy()
+            end
+        end
+    end)
+
+    task.wait(0.2777)
+
+    local RunService = game:GetService("RunService")
+    local Ball = workspace.Football
+
+    local function Bezier(p0, p1, p2, p3, t)
+        local u = 1 - t
+        return u^3 * p0 + 3 * u^2 * t * p1 + 3 * u * t^2 * p2 + t^3 * p3
+    end
+
+    local function LaunchBall()
+        local startPos = Ball.Position
+        local lookVector = humanoidRootPart.CFrame.LookVector
+        local rightVector = humanoidRootPart.CFrame.RightVector
+
+        local randomDirection = math.random(0, 1) == 0 and 32.888 or -32.888
+        local endPos = startPos + lookVector * 95.888
+        local controlPos1 = startPos + lookVector * 37.0777 + rightVector * randomDirection + Vector3.new(0, 30.0777, 0)
+        local controlPos2 = startPos + lookVector * 37.0777 - rightVector * randomDirection + Vector3.new(0, 30.0777, 0)
+
+        local duration = 1.1888
+        local elapsed = 0
+
+        local conn
+        conn = RunService.RenderStepped:Connect(function(dt)
+            elapsed = math.min(elapsed + dt, duration)
+            local t = elapsed / duration
+            Ball.Position = Vector3.new(
+                Bezier(startPos.X, controlPos1.X, controlPos2.X, endPos.X, t),
+                Bezier(startPos.Y, controlPos1.Y, controlPos2.Y, endPos.Y, t),
+                Bezier(startPos.Z, controlPos1.Z, controlPos2.Z, endPos.Z, t)
+            )
+
+            if elapsed >= duration then
+                conn:Disconnect()
+            end
+        end)
+    end
+
+    LaunchBall()
+    wait(1.886)
+    sound:Destroy()
+end
+
+-- Ability Button Initialization
+local function initializeAbility()
+    local abilitiesUI = player.PlayerGui:WaitForChild("InGameUI"):WaitForChild("Bottom"):WaitForChild("Abilities")
+
+    -- Check if button already exists
+    if abilitiesUI:FindFirstChild(buttonName) then
+        return
+    end
+
+    local button = abilitiesUI["1"]:Clone()
+    button.Name = buttonName
+    button.Parent = abilitiesUI
+    button.LayoutOrder = buttonPosition
+    button.Keybind.Text = abilityKey.Name
+    button.Timer.Text = abilityName
+    button.ActualTimer.Text = ""
+
+    local function triggerAbility()
+        if isCooldown then return end
+        local currentTime = tick()
+        if currentTime - lastAbilityTime < cooldownDuration then return end
+        lastAbilityTime = currentTime
+
+        playAnimationAndEffects()
+
+        local cooldownFrame = button:FindFirstChild("Cooldown")
+        local tween = TweenService:Create(cooldownFrame.UIGradient, tweenInfo, { Offset = Vector2.new(0, 1) })
+
+        isCooldown = true
+        cooldownFrame.UIGradient.Offset = Vector2.new(0, 0)
+        tween:Play()
+        tween.Completed:Connect(function()
+            isCooldown = false
+            print("Cooldown finished.")
+        end)
+        print("Cooldown started.")
+    end
+
+    -- Connect ability activation events
+    button.Activated:Connect(triggerAbility)
+
+    -- Ensure keybind doesn't stack multiple times
+    for _, conn in pairs(UserInputService.InputBegan:GetConnections()) do
+        if conn.Function == triggerAbility then
+            conn:Disconnect()
+        end
+    end
+
+    UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if not gameProcessed and input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == abilityKey then
+            triggerAbility()
+        end
+    end)
+end
+
+-- Ensure ability initializes only once
+if not player.Character or not player.Character.Parent then
+    player.CharacterAdded:Wait()
+end
+initializeAbility()
+
+player.CharacterAdded:Connect(initializeAbility)
+
+
+
+--move 5 lol finally
+
+
+
+
+
+
+
+local player = game.Players.LocalPlayer
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+local cooldownTime = 4  -- Cooldown time (in seconds)
+local abilityKey = Enum.KeyCode.J  -- Key to activate ability
+local buttonName = "apaooso"  -- Name for the ability button
+local abilityName = "Lokis Feint"  -- Name of the ability
+local buttonPosition = -3  -- Position in the layout (can be adjusted)
+
+local isCooldown = false
+local lastAbilityTime = 0
+local cooldownDuration = cooldownTime  -- Cooldown duration (in seconds)
+local tweenInfo = TweenInfo.new(cooldownTime, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut, 0, false, 0)
+
+-- Initialize ability button and setup
+local function initializeAbility()
+    local button = player.PlayerGui.InGameUI.Bottom.Abilities["1"]:Clone()
+
+    -- Trigger ability logic
+    local function triggerAbility()
+        if isCooldown then return end
+
+        local currentTime = tick()
+        if currentTime - lastAbilityTime < cooldownDuration then
+            return
+        end
+
+        lastAbilityTime = currentTime
+        isCooldown = true
+    
+
+local player = game.Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoid = character:WaitForChild("Humanoid")
+
+-- Animation setup
+local animation = Instance.new("Animation")
+animation.AnimationId = "rbxassetid://86021228880765"
+
+local animator = humanoid:FindFirstChild("Animator") or Instance.new("Animator", humanoid)
+local track = animator:LoadAnimation(animation)
+
+track.Priority = Enum.AnimationPriority.Action4
+track:Play()
+
+-- Wait 0.5 seconds before applying effects
+task.wait(0.5)
+game:GetService("ReplicatedStorage").Packages.Knit.Services.BallService.RE.Dribble:FireServer()
+
+-- Highlight character yellow
+local highlight = Instance.new("Highlight")
+highlight.Parent = character
+highlight.FillColor = Color3.fromRGB(255, 255, 0) -- Yellow
+highlight.OutlineTransparency = 1
+
+-- Pop-up text effect near right arm at the same time the highlight shows up
+local rightArm = character:FindFirstChild("Right Arm") or character:FindFirstChild("RightHand")
+if rightArm then
+    local billboard = Instance.new("BillboardGui")
+    billboard.Parent = character
+    billboard.Adornee = rightArm
+    billboard.Size = UDim2.new(5, 0, 2, 0)
+    billboard.StudsOffset = Vector3.new(3.5, 1, 0) -- Offset to the right
+    billboard.AlwaysOnTop = true
+
+    local textLabel = Instance.new("TextLabel")
+    textLabel.Parent = billboard
+    textLabel.Size = UDim2.new(2, 0, 2, 0)
+    textLabel.BackgroundTransparency = 1
+    textLabel.Text = "Fake!"
+    textLabel.TextColor3 = Color3.fromRGB(255, 255, 0) -- Yellow text
+    textLabel.Font = Enum.Font.Kalam
+    textLabel.TextScaled = true
+
+    -- Black outline for the text
+    textLabel.TextStrokeTransparency = 0 -- Adjust for outline thickness
+    textLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0) -- Black outline
+
+    -- Tween for size animation (grow, shrink, disappear)
+    local tweenService = game:GetService("TweenService")
+
+    local growTween = tweenService:Create(textLabel, TweenInfo.new(0.8, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {Size = UDim2.new(4.7, 0, 4.7, 0)})
+    local shrinkTween = tweenService:Create(textLabel, TweenInfo.new(0.4, Enum.EasingStyle.Cubic, Enum.EasingDirection.In), {Size = UDim2.new(0.5, 0, 0.5, 0), TextTransparency = 1})
+
+    growTween:Play()
+    shrinkTween:Play()  -- Start shrinking immediately after growing starts
+
+    shrinkTween.Completed:Connect(function()
+        billboard:Destroy()
+    end)
+end
+
+-- Remove yellow highlight after 0.5s
+task.wait(0.5)
+highlight:Destroy() -- Remove highlight
+
+
+local redHighlight = Instance.new("Highlight")
+redHighlight.Parent = character
+redHighlight.FillColor = Color3.fromRGB(255, 0, 0) -- Red
+redHighlight.OutlineTransparency = 1
+
+-- Pop-up "Shoot!" text near right arm
+local rightArm = character:FindFirstChild("Right Arm") or character:FindFirstChild("RightHand")
+if rightArm then
+    local billboard = Instance.new("BillboardGui")
+    billboard.Parent = character
+    billboard.Adornee = rightArm
+    billboard.Size = UDim2.new(5, 0, 2, 0)
+    billboard.StudsOffset = Vector3.new(3.5, 1, 0) -- Offset to the right
+    billboard.AlwaysOnTop = true
+
+    local textLabel = Instance.new("TextLabel")
+    textLabel.Parent = billboard
+    textLabel.Size = UDim2.new(2, 0, 2, 0)
+    textLabel.BackgroundTransparency = 1
+    textLabel.Text = "Shoot!"
+    textLabel.TextColor3 = Color3.fromRGB(255, 0, 0) -- Red text
+    textLabel.Font = Enum.Font.Kalam
+    textLabel.TextScaled = true
+
+    -- Black outline for the text
+    textLabel.TextStrokeTransparency = 0 -- Adjust for outline thickness
+    textLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0) -- Black outline
+
+    -- Tween for size animation (grow, shrink, disappear)
+    local tweenService = game:GetService("TweenService")
+
+    local growTween = tweenService:Create(textLabel, TweenInfo.new(0.8, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {Size = UDim2.new(4.7, 0, 4.7, 0)})
+    local shrinkTween = tweenService:Create(textLabel, TweenInfo.new(0.4, Enum.EasingStyle.Cubic, Enum.EasingDirection.In), {Size = UDim2.new(0.5, 0, 0.5, 0), TextTransparency = 1})
+
+    growTween:Play()
+    shrinkTween:Play()  -- Start shrinking immediately after growing starts
+
+    shrinkTween.Completed:Connect(function()
+        billboard:Destroy()
+        redHighlight:Destroy() -- Remove the red highlight after the text disappears
+    end)
+end
+
+-- Remove red highlight after 0.4s
+task.wait(0.2)
+
+
+local vfx = game:GetObjects("rbxassetid://18516580937")[1]
+local bodyPartName = "HumanoidRootPart" -- Change this to the desired body part
+local duration = 0.7 -- Effect duration in seconds
+local fadeOutTime = 1 -- Time it takes to fade out
+local sizeMultiplier = 2 -- Scale the particle size (1 = default)
+local newColor = Color3.fromRGB(255, 255, 255) -- Change this to any color
+local minTransparency = 0.8
+local maxTransparency = 1
+
+local character = game.Players.LocalPlayer.Character
+if character and character:FindFirstChild(bodyPartName) then
+    local targetPart = character[bodyPartName]
+
+    for _, v in pairs(vfx:GetDescendants()) do
+        if v:IsA("ParticleEmitter") then
+            local clone = v:Clone()
+            clone.Parent = targetPart
+
+            -- Scale particle size
+            if sizeMultiplier ~= 1 then
+                local function newSize(seq)
+                    local newKeypoints = {}
+                    for _, kp in ipairs(seq.Keypoints) do
+                        table.insert(newKeypoints, NumberSequenceKeypoint.new(kp.Time, kp.Value * sizeMultiplier))
+                    end
+                    return NumberSequence.new(newKeypoints)
+                end
+                clone.Size = newSize(clone.Size)
+            end
+
+            -- Change color
+            clone.Color = ColorSequence.new(newColor)
+
+            -- Set transparency range
+            local transparencySeq = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, minTransparency),
+                NumberSequenceKeypoint.new(1, maxTransparency)
+            })
+            clone.Transparency = transparencySeq
+
+            -- Fade out effect
+            task.delay(duration, function()
+                local startRate = clone.Rate
+                local startTime = tick()
+
+                while tick() - startTime < fadeOutTime do
+                    local progress = (tick() - startTime) / fadeOutTime
+                    clone.Rate = startRate * (1 - progress) -- Decrease rate over time
+                    clone.Transparency = NumberSequence.new({
+                        NumberSequenceKeypoint.new(0, minTransparency + (maxTransparency - minTransparency) * progress),
+                        NumberSequenceKeypoint.new(1, maxTransparency)
+                    })
+                    task.wait() -- Smoothly update
+                end
+
+                clone.Enabled = false -- Disable emission
+                task.wait(2) -- Extra delay before removing
+                clone:Destroy()
+            end)
+        end
+    end
+end
+
+
+
+
+wait(0.3)
+local args = {
+    [1] = 180,
+}
+
+game:GetService("ReplicatedStorage").Packages.Knit.Services.BallService.RE.Shoot:FireServer(unpack(args))
+
+wait(0.4)
+redHighlight:Destroy() -- Remove red highlight
+        -- Cooldown UI handling
+        local cooldownFrame = button:FindFirstChild("Cooldown")
+        local tween = TweenService:Create(cooldownFrame.UIGradient, tweenInfo, { Offset = Vector2.new(0, 1) })
+
+        cooldownFrame.UIGradient.Offset = Vector2.new(0, 0)
+        tween:Play()
+        tween.Completed:Connect(function()
+            isCooldown = false
+            print("Cooldown finished.")
+        end)
+
+        print("Cooldown started.")
+
+    end
+
+    -- Customize the button
+    button.Name = buttonName
+    button.Parent = player.PlayerGui.InGameUI.Bottom.Abilities
+    button.LayoutOrder = buttonPosition
+    button.Keybind.Text = abilityKey.Name
+    button.Timer.Text = abilityName
+    button.ActualTimer.Text = ""
+
+    -- Connect ability activation events
+    button.Activated:Connect(triggerAbility)
+    UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if not gameProcessed and input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == abilityKey then
+            triggerAbility()
+        end
+    end)
+
+end
+
+initializeAbility()
