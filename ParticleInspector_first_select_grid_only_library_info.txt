@@ -1,0 +1,6360 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local HttpService = game:GetService("HttpService")
+local CoreGui = game:GetService("CoreGui")
+local UIS = game:GetService("UserInputService")
+local TextService = game:GetService("TextService")
+local TweenService = game:GetService("TweenService")
+local GuiService = game:GetService("GuiService")
+
+local LP = Players.LocalPlayer
+
+local ROOT_FOLDER = "ParticleInspector"
+local LIBRARY_FILE = ROOT_FOLDER .. "/TextureLibrary.json"
+
+local FAV_FOLDER = ROOT_FOLDER .. "/favourites"
+local FAV_INDEX_FILE = FAV_FOLDER .. "/index.json"
+
+local function folderExists(path)
+	if type(isfolder) == "function" then
+		local ok, v = pcall(isfolder, path)
+		if ok then return v == true end
+	end
+	return false
+end
+
+local function ensureFolder(path)
+	if folderExists(path) then return true end
+	if type(makefolder) ~= "function" then return false end
+	local ok = pcall(makefolder, path)
+	if ok and folderExists(path) then return true end
+	return folderExists(path)
+end
+
+ensureFolder(ROOT_FOLDER)
+ensureFolder(FAV_FOLDER)
+
+local function sanitizeNumber(n)
+	n = tonumber(n)
+	if not n then return 0 end
+	if n ~= n then return 0 end
+	if n == math.huge or n == -math.huge then return 0 end
+	return n
+end
+
+local function sanitizeForJSON(v, depth)
+	depth = depth or 0
+	if depth > 40 then return nil end
+	local t = type(v)
+	if t == "nil" then return nil end
+	if t == "boolean" then return v end
+	if t == "string" then return v end
+	if t == "number" then return sanitizeNumber(v) end
+	if t == "table" then
+		local out = {}
+		for k, val in pairs(v) do
+			local sk
+			if type(k) == "string" or type(k) == "number" then
+				sk = k
+			else
+				sk = tostring(k)
+			end
+			out[sk] = sanitizeForJSON(val, depth + 1)
+		end
+		return out
+	end
+	return tostring(v)
+end
+
+local function encode(v)
+	local cleaned = sanitizeForJSON(v)
+	local ok, result = pcall(function()
+		return HttpService:JSONEncode(cleaned)
+	end)
+	if ok and type(result) == "string" then return result end
+	return nil
+end
+
+local function decode(v)
+	if type(v) ~= "string" or v == "" then return nil end
+	local ok, result = pcall(function()
+		return HttpService:JSONDecode(v)
+	end)
+	if ok then return result end
+	return nil
+end
+
+local function readJSON(path)
+	if type(readfile) ~= "function" then return nil end
+	local ok, data = pcall(readfile, path)
+	if not ok or type(data) ~= "string" then return nil end
+	return decode(data)
+end
+
+local function writeRaw(path, data)
+	if type(writefile) ~= "function" then return false end
+	local ok = pcall(writefile, path, data)
+	return ok
+end
+
+local function writeJSON(path, data)
+	local encoded = encode(data)
+	if not encoded then return false, "JSON encode failed" end
+	if writeRaw(path, encoded) then
+		return true, ""
+	end
+	task.wait(0.03)
+	if writeRaw(path, encoded) then
+		return true, ""
+	end
+	return false, "writefile failed after retries"
+end
+
+local function deleteFile(path)
+	if type(delfile) == "function" then
+		pcall(delfile, path)
+	end
+end
+
+local function listFolder(path)
+	if type(listfiles) ~= "function" then return {} end
+	local ok, result = pcall(listfiles, path)
+	if ok and type(result) == "table" then return result end
+	return {}
+end
+
+local function basename(path)
+	local s = tostring(path):gsub("\\", "/")
+	return s:match("([^/]+)$") or s
+end
+
+local function joinPath(folder, file)
+	folder = tostring(folder or ""):gsub("\\", "/"):gsub("/+$", "")
+	file = tostring(file or ""):gsub("\\", "/"):gsub("^/+", "")
+	if folder == "" then return file end
+	if file == "" then return folder end
+	return folder .. "/" .. file
+end
+
+local function serialize(v)
+	local t = typeof(v)
+	if v == nil then return { __type = "nil" } end
+	if t == "string" then return v end
+	if t == "boolean" then return v end
+	if t == "number" then return sanitizeNumber(v) end
+	if t == "Vector2" then return { __type = "Vector2", X = sanitizeNumber(v.X), Y = sanitizeNumber(v.Y) } end
+	if t == "Vector3" then return { __type = "Vector3", X = sanitizeNumber(v.X), Y = sanitizeNumber(v.Y), Z = sanitizeNumber(v.Z) } end
+	if t == "Vector2int16" then return { __type = "Vector2int16", X = sanitizeNumber(v.X), Y = sanitizeNumber(v.Y) } end
+	if t == "Vector3int16" then return { __type = "Vector3int16", X = sanitizeNumber(v.X), Y = sanitizeNumber(v.Y), Z = sanitizeNumber(v.Z) } end
+	if t == "Color3" then return { __type = "Color3", R = sanitizeNumber(v.R), G = sanitizeNumber(v.G), B = sanitizeNumber(v.B) } end
+	if t == "UDim" then return { __type = "UDim", Scale = sanitizeNumber(v.Scale), Offset = sanitizeNumber(v.Offset) } end
+	if t == "UDim2" then return { __type = "UDim2", XScale = sanitizeNumber(v.X.Scale), XOffset = sanitizeNumber(v.X.Offset), YScale = sanitizeNumber(v.Y.Scale), YOffset = sanitizeNumber(v.Y.Offset) } end
+	if t == "BrickColor" then return { __type = "BrickColor", Number = sanitizeNumber(v.Number) } end
+	if t == "CFrame" then
+		local c = { v:GetComponents() }
+		for i = 1, #c do
+			c[i] = sanitizeNumber(c[i])
+		end
+		return { __type = "CFrame", Components = c }
+	end
+	if t == "NumberRange" then return { __type = "NumberRange", Min = sanitizeNumber(v.Min), Max = sanitizeNumber(v.Max) } end
+	if t == "NumberSequence" then
+		local points = {}
+		for _, p in ipairs(v.Keypoints) do
+			points[#points + 1] = {
+				Time = sanitizeNumber(p.Time),
+				Value = sanitizeNumber(p.Value),
+				Envelope = sanitizeNumber(p.Envelope)
+			}
+		end
+		return { __type = "NumberSequence", Keypoints = points }
+	end
+	if t == "ColorSequence" then
+		local points = {}
+		for _, p in ipairs(v.Keypoints) do
+			points[#points + 1] = { Time = sanitizeNumber(p.Time), Value = serialize(p.Value) }
+		end
+		return { __type = "ColorSequence", Keypoints = points }
+	end
+	if t == "PhysicalProperties" then
+		return {
+			__type = "PhysicalProperties",
+			Density = sanitizeNumber(v.Density),
+			Friction = sanitizeNumber(v.Friction),
+			Elasticity = sanitizeNumber(v.Elasticity),
+			FrictionWeight = sanitizeNumber(v.FrictionWeight),
+			ElasticityWeight = sanitizeNumber(v.ElasticityWeight)
+		}
+	end
+	if t == "EnumItem" then
+		return { __type = "EnumItem", EnumType = tostring(v.EnumType), Name = v.Name, Value = sanitizeNumber(v.Value) }
+	end
+	if t == "Ray" then
+		return { __type = "Ray", Origin = serialize(v.Origin), Direction = serialize(v.Direction) }
+	end
+	if t == "Rect" then
+		return { __type = "Rect", Min = serialize(v.Min), Max = serialize(v.Max) }
+	end
+	if t == "Font" then
+		return { __type = "Font", Family = v.Family, Weight = serialize(v.Weight), Style = serialize(v.Style) }
+	end
+	return tostring(v)
+end
+
+local function deserialize(v)
+	if type(v) ~= "table" or not v.__type then return v end
+	local t = v.__type
+	if t == "nil" then return nil end
+	if t == "Vector2" then return Vector2.new(v.X, v.Y) end
+	if t == "Vector3" then return Vector3.new(v.X, v.Y, v.Z) end
+	if t == "Vector2int16" then return Vector2int16.new(v.X, v.Y) end
+	if t == "Vector3int16" then return Vector3int16.new(v.X, v.Y, v.Z) end
+	if t == "Color3" then return Color3.new(v.R, v.G, v.B) end
+	if t == "UDim" then return UDim.new(v.Scale, v.Offset) end
+	if t == "UDim2" then return UDim2.new(v.XScale, v.XOffset, v.YScale, v.YOffset) end
+	if t == "BrickColor" then return BrickColor.new(v.Number) end
+	if t == "CFrame" then return CFrame.new(table.unpack(v.Components)) end
+	if t == "NumberRange" then return NumberRange.new(v.Min, v.Max) end
+	if t == "NumberSequence" then
+		local points = {}
+		for _, p in ipairs(v.Keypoints or {}) do
+			points[#points + 1] = NumberSequenceKeypoint.new(p.Time, p.Value, p.Envelope or 0)
+		end
+		if #points > 0 then return NumberSequence.new(points) end
+		return NumberSequence.new(0)
+	end
+	if t == "ColorSequence" then
+		local points = {}
+		for _, p in ipairs(v.Keypoints or {}) do
+			local c = deserialize(p.Value)
+			points[#points + 1] = ColorSequenceKeypoint.new(p.Time, c)
+		end
+		if #points > 0 then return ColorSequence.new(points) end
+		return ColorSequence.new(Color3.new(1, 1, 1))
+	end
+	if t == "PhysicalProperties" then
+		return PhysicalProperties.new(v.Density, v.Friction, v.Elasticity, v.FrictionWeight, v.ElasticityWeight)
+	end
+	if t == "EnumItem" then
+		local enumName = tostring(v.EnumType):match("%.([^%.]+)$") or tostring(v.EnumType)
+		if enumName and Enum[enumName] then
+			local ok, result = pcall(function()
+				return Enum[enumName][v.Name]
+			end)
+			if ok and result then return result end
+			if type(v.Value) == "number" then
+				for _, item in ipairs(Enum[enumName]:GetEnumItems()) do
+					if item.Value == v.Value then
+						return item
+					end
+				end
+			end
+		end
+		return v.Name
+	end
+	if t == "Ray" then
+		return Ray.new(deserialize(v.Origin), deserialize(v.Direction))
+	end
+	if t == "Rect" then
+		return Rect.new(deserialize(v.Min), deserialize(v.Max))
+	end
+	if t == "Font" then
+		local family = v.Family or "rbxasset://fonts/families/SourceSansPro.json"
+		local weight = deserialize(v.Weight) or Enum.FontWeight.Regular
+		local style = deserialize(v.Style) or Enum.FontStyle.Normal
+		local ok, result = pcall(function()
+			return Font.new(family, weight, style)
+		end)
+		if ok then return result end
+	end
+	return v
+end
+
+local particleProperties = {
+	"Enabled", "Rate", "Lifetime", "Speed", "Size", "Transparency",
+	"LightEmission", "LightInfluence", "Rotation", "RotSpeed", "SpreadAngle",
+	"Drag", "Acceleration", "EmissionDirection", "Shape", "ShapeInOut",
+	"ShapeStyle", "LockedToPart", "Orientation", "Squash", "ZOffset",
+	"Brightness", "Color", "Texture", "TimeScale", "VelocityInheritance",
+	"WindAffectsDrag", "VelocitySpread", "LocalTransparencyModifier",
+	"FlipbookFramerate", "FlipbookLayout", "FlipbookMode",
+	"FlipbookStartRandom", "FlipbookSizeX", "FlipbookSizeY", "FlipbookBlendFrames",
+	"ShapePartial"
+}
+
+local INFO_HEADER_PROPS = {
+	Texture = true,
+}
+
+local friendly
+do
+	local function num(v, precise)
+		v = tonumber(v)
+		if not v then return 0 end
+		if v ~= v then return 0 end
+		if v == math.huge or v == -math.huge then return 0 end
+
+		local absV = math.abs(v)
+		local intEps = math.max(5e-4, absV * 1e-8)
+		if intEps > 5e-3 then intEps = 5e-3 end
+
+		local nearestInt = math.floor(v + 0.5)
+		if v < 0 then
+			nearestInt = math.ceil(v - 0.5)
+		end
+		if math.abs(v - nearestInt) <= intEps then
+			return nearestInt
+		end
+
+		if not precise then
+			local r
+			if v >= 0 then
+				r = math.floor(v * 100 + 0.5) / 100
+			else
+				r = math.ceil(v * 100 - 0.5) / 100
+			end
+			local ni = math.floor(r + 0.5)
+			if r < 0 then
+				ni = math.ceil(r - 0.5)
+			end
+			if math.abs(r - ni) < 1e-9 then
+				return ni
+			end
+			return r
+		end
+
+		for decimals = 1, 8 do
+			local scale = 10 ^ decimals
+			local rounded
+			if v >= 0 then
+				rounded = math.floor(v * scale + 0.5) / scale
+			else
+				rounded = math.ceil(v * scale - 0.5) / scale
+			end
+			local tol = math.max(1e-10, absV * 1e-12)
+			if math.abs(v - rounded) <= tol then
+				local ni = math.floor(rounded + 0.5)
+				if rounded < 0 then
+					ni = math.ceil(rounded - 0.5)
+				end
+				if math.abs(rounded - ni) < 1e-12 then
+					return ni
+				end
+				return rounded
+			end
+		end
+
+		local s = string.format("%.10g", v)
+		local cleaned = tonumber(s)
+		if cleaned then
+			local ni = math.floor(cleaned + 0.5)
+			if cleaned < 0 then
+				ni = math.ceil(cleaned - 0.5)
+			end
+			if math.abs(cleaned - ni) <= intEps then
+				return ni
+			end
+			return cleaned
+		end
+		return v
+	end
+
+	local function vec3(v, precise)
+		if typeof(v) ~= "Vector3" then return tostring(v) end
+		return string.format("%s, %s, %s", num(v.X, precise), num(v.Y, precise), num(v.Z, precise))
+	end
+
+	local function vec2(v, precise)
+		if typeof(v) ~= "Vector2" then return tostring(v) end
+		return string.format("%s, %s", num(v.X, precise), num(v.Y, precise))
+	end
+
+	local function seqPoints(s)
+		local points = {}
+		if typeof(s) ~= "NumberSequence" then return points end
+		for _, kp in ipairs(s.Keypoints) do
+			points[#points + 1] = { Time = kp.Time, Value = kp.Value, Envelope = kp.Envelope }
+		end
+		return points
+	end
+
+	local function formatNumberSequence(s, precise)
+		local p = seqPoints(s)
+		if #p == 0 then
+			if type(s) == "number" then
+				return "T:0 V:" .. tostring(num(s, precise))
+			end
+			return tostring(s)
+		end
+		local out = {}
+		for _, k in ipairs(p) do
+			local piece = string.format("T:%s V:%s", num(k.Time, precise), num(k.Value, precise))
+			local env = tonumber(k.Envelope) or 0
+			if env ~= 0 then
+				piece = piece .. string.format(" E:%s", num(env, precise))
+			end
+			out[#out + 1] = piece
+		end
+		return table.concat(out, "  →  ")
+	end
+
+	local function formatColorSequence(s, precise)
+		if typeof(s) ~= "ColorSequence" then return tostring(s) end
+		local out = {}
+		for _, kp in ipairs(s.Keypoints) do
+			local c = kp.Value
+			local r = math.floor(c.R * 255 + 0.5)
+			local g = math.floor(c.G * 255 + 0.5)
+			local b = math.floor(c.B * 255 + 0.5)
+			out[#out + 1] = string.format("T:%s RGB(%d, %d, %d)", num(kp.Time, precise), r, g, b)
+		end
+		return table.concat(out, "  →  ")
+	end
+
+	local function formatNumberRange(r, precise)
+		if typeof(r) ~= "NumberRange" then
+			if type(r) == "number" then
+				return tostring(num(r, precise))
+			end
+			return tostring(r)
+		end
+		local a, b = num(r.Min, precise), num(r.Max, precise)
+		if a == b then
+			return tostring(a)
+		end
+		return tostring(a) .. " – " .. tostring(b)
+	end
+
+	friendly = function(property, value, precise)
+		if value == nil then return "—" end
+		precise = precise == true
+
+		local t = typeof(value)
+
+		if t == "boolean" then
+			return value and "true" or "false"
+		end
+
+		if t == "NumberSequence" then
+			return formatNumberSequence(value, precise)
+		end
+		if t == "ColorSequence" then
+			return formatColorSequence(value, precise)
+		end
+		if t == "NumberRange" then
+			return formatNumberRange(value, precise)
+		end
+		if t == "Vector3" then
+			return vec3(value, precise)
+		end
+		if t == "Vector2" then
+			return vec2(value, precise)
+		end
+		if t == "Color3" then
+			local r = math.floor(value.R * 255 + 0.5)
+			local g = math.floor(value.G * 255 + 0.5)
+			local b = math.floor(value.B * 255 + 0.5)
+			return string.format("RGB(%d, %d, %d)", r, g, b)
+		end
+		if t == "EnumItem" then
+			return value.Name
+		end
+		if t == "number" or type(value) == "number" then
+			return tostring(num(value, precise))
+		end
+		if t == "string" then
+			return value
+		end
+
+		return tostring(value)
+	end
+end
+
+local getPath
+do
+	local PathCache = setmetatable({}, { __mode = "k" })
+
+	getPath = function(o)
+		if type(o) == "table" and o.Path then
+			return o.Path
+		end
+		if type(o) ~= "table" and PathCache[o] then
+			return PathCache[o]
+		end
+
+		local p = {}
+		local x = o
+		while x and x ~= game do
+			p[#p + 1] = x.Name
+			x = x.Parent
+		end
+		for i = 1, math.floor(#p / 2) do
+			local j = #p - i + 1
+			p[i], p[j] = p[j], p[i]
+		end
+
+		local pathStr = table.concat(p, ".")
+
+		if type(o) ~= "table" then
+			PathCache[o] = pathStr
+		end
+
+		return pathStr
+	end
+end
+
+local function getTexture(o)
+	if type(o) == "table" then
+		if o.Texture and tostring(o.Texture) ~= "" then
+			return tostring(o.Texture)
+		end
+		if o.Properties and o.Properties.Texture then
+			local t = o.Properties.Texture
+			if type(t) == "table" and t.__type then
+				return tostring(deserialize(t) or "")
+			end
+			local s = tostring(t or "")
+			if s ~= "" then return s end
+		end
+		return ""
+	end
+	local ok, v = pcall(function()
+		return o.Texture
+	end)
+	if ok and v ~= nil and tostring(v) ~= "" then
+		return tostring(v)
+	end
+	-- Fallback for newer TextureContent (Content type)
+	local ok2, content = pcall(function()
+		return o.TextureContent
+	end)
+	if ok2 and content ~= nil then
+		local ok3, uri = pcall(function()
+			if typeof(content) == "Content" then
+				return content.Uri or content.uri or tostring(content)
+			end
+			return tostring(content)
+		end)
+		if ok3 and uri and tostring(uri) ~= "" then
+			return tostring(uri)
+		end
+	end
+	return ""
+end
+
+local function getEmitCount(o)
+	if type(o) == "table" and o.EmitCount then
+		return tonumber(o.EmitCount) or 1
+	end
+	local ok, v = pcall(function()
+		return o:GetAttribute("EmitCount")
+	end)
+	if ok and typeof(v) == "number" then return v end
+	return 1
+end
+
+local function getInfo(o)
+	if type(o) == "table" then
+		return o
+	end
+	local nameOk, nameVal = pcall(function() return o.Name end)
+	local classOk, classVal = pcall(function() return o.ClassName end)
+	local data = {
+		Name = (nameOk and tostring(nameVal)) or "Particle",
+		Class = (classOk and tostring(classVal)) or "ParticleEmitter",
+		Path = getPath(o),
+		Texture = getTexture(o),
+		EmitCount = getEmitCount(o),
+		Properties = {},
+		Attributes = {}
+	}
+	for _, property in ipairs(particleProperties) do
+		local ok, v = pcall(function()
+			return o[property]
+		end)
+		if ok and v ~= nil then
+			local sOk, sVal = pcall(serialize, v)
+			if sOk and sVal ~= nil then
+				data.Properties[property] = sVal
+			end
+		end
+	end
+	-- Ensure Texture is always present in Properties when we have a value
+	if data.Texture ~= "" and data.Properties.Texture == nil then
+		data.Properties.Texture = data.Texture
+	end
+	local attrOk, attrs = pcall(function()
+		return o:GetAttributes()
+	end)
+	if attrOk and type(attrs) == "table" then
+		for name, value in pairs(attrs) do
+			local sOk, sVal = pcall(serialize, value)
+			if sOk and sVal ~= nil then
+				data.Attributes[tostring(name)] = sVal
+			end
+		end
+	end
+	return data
+end
+
+local function loadParticleFile(path)
+	local data = readJSON(path)
+	if type(data) == "table" then return data end
+	return nil
+end
+
+-- ===================== TEXTURE LIBRARY (one shared file, texture ids only, no duplicates) =====================
+
+local TextureLibrary = {}
+local LibrarySet = {}
+local LibraryNames = {} -- texture id -> particle name exactly as the game set it
+local LibraryKeywords = {} -- texture id -> list of path keywords (the service name is left out)
+local Flip = { Grids = {} } -- flipbook player + saved flipbook grids (texture id -> { C, R, M, F, Manual })
+
+-- ReplicatedStorage.Utils.Misc.DecapitateBlood.BloodSplatter  ->  Utils, Misc, DecapitateBlood, BloodSplatter
+local function pathToKeywords(path)
+	local out = {}
+	if type(path) ~= "string" then return out end
+	local seen = {}
+	local first = true
+	for part in string.gmatch(path, "[^%.]+") do
+		if first then
+			first = false -- first part is the service (ReplicatedStorage, Workspace ...), so skip it
+		elseif not seen[part] then
+			seen[part] = true
+			out[#out + 1] = part
+		end
+	end
+	return out
+end
+local normalizeTextureId
+local loadLibraryFromDisk
+local saveLibraryToDisk
+local addTextureToLibrary
+local removeTextureFromLibrary
+
+do
+	normalizeTextureId = function(raw)
+		local s = tostring(raw or "")
+		s = (s:gsub("^%s+", ""))
+		s = (s:gsub("%s+$", ""))
+		if s == "" or s == "None" then return nil end
+
+		-- plain number -> rbxassetid://number
+		if s:match("^%d+$") then
+			return "rbxassetid://" .. s
+		end
+
+		-- rbxassetid://123 (any capitalisation)
+		local id = s:lower():match("^rbxassetid://(%d+)")
+		if id then
+			return "rbxassetid://" .. id
+		end
+
+		-- old style links: http://www.roblox.com/asset/?id=123
+		local lower = s:lower()
+		if lower:match("^https?://") then
+			local linkId = s:match("[%?&][iI][dD]=(%d+)")
+			if linkId then
+				return "rbxassetid://" .. linkId
+			end
+		end
+
+		return s
+	end
+
+	loadLibraryFromDisk = function()
+		table.clear(TextureLibrary)
+		table.clear(LibrarySet)
+		table.clear(LibraryNames)
+		table.clear(LibraryKeywords)
+		table.clear(Flip.Grids)
+		local data = readJSON(LIBRARY_FILE)
+		if type(data) ~= "table" then return end
+		local list = data.Textures
+		if type(list) ~= "table" then return end
+		for _, v in ipairs(list) do
+			local rawId, rawName, rawPath, rawKeywords, rawGrid = v, nil, nil, nil, nil
+			if type(v) == "table" then
+				rawId = v.Id
+				rawName = v.Name
+				rawPath = v.Path
+				rawKeywords = v.Keywords
+				rawGrid = v.Grid
+			end
+			local id = normalizeTextureId(rawId)
+			if id then
+				if type(rawGrid) == "table" and tonumber(rawGrid.C) and tonumber(rawGrid.R) and not Flip.Grids[id] then
+					Flip.Grids[id] = {
+						C = math.clamp(math.floor(tonumber(rawGrid.C)), 1, 64),
+						R = math.clamp(math.floor(tonumber(rawGrid.R)), 1, 64),
+						Manual = rawGrid.Manual == true or nil,
+					}
+				end
+				if not LibrarySet[id] then
+					LibrarySet[id] = true
+					TextureLibrary[#TextureLibrary + 1] = id
+				end
+				if type(rawName) == "string" and rawName ~= "" and not LibraryNames[id] then
+					LibraryNames[id] = rawName
+				end
+				if not LibraryKeywords[id] then
+					local kw = nil
+					if type(rawKeywords) == "table" then
+						kw = {}
+						for _, k in ipairs(rawKeywords) do
+							if type(k) == "string" and k ~= "" then
+								kw[#kw + 1] = k
+							end
+						end
+					elseif type(rawPath) == "string" and rawPath ~= "" then
+						-- older saves kept the whole path: split it into keywords now
+						kw = pathToKeywords(rawPath)
+					end
+					if kw and #kw > 0 then
+						LibraryKeywords[id] = kw
+					end
+				end
+			end
+		end
+	end
+
+	saveLibraryToDisk = function()
+		ensureFolder(ROOT_FOLDER)
+		local entries = {}
+		for i = 1, #TextureLibrary do
+			local id = TextureLibrary[i]
+			entries[i] = { Id = id, Name = LibraryNames[id] or "", Keywords = LibraryKeywords[id] or {}, Grid = Flip.Grids[id] }
+		end
+		local payload = {
+			Version = 4,
+			Count = #entries,
+			Textures = entries
+		}
+		return writeJSON(LIBRARY_FILE, payload)
+	end
+
+	-- returns true only when the texture was new
+	addTextureToLibrary = function(raw, particleName, particlePath, grid)
+		local id = normalizeTextureId(raw)
+		if not id then return false end
+		if type(grid) == "table" and tonumber(grid.C) and tonumber(grid.R) then
+			local old = Flip.Grids[id]
+			if not (old and old.Manual) then
+				Flip.Grids[id] = {
+					C = math.clamp(math.floor(tonumber(grid.C) or 1), 1, 64),
+					R = math.clamp(math.floor(tonumber(grid.R) or 1), 1, 64),
+					Manual = grid.Manual == true or nil,
+				}
+			end
+		end
+		local hasName = type(particleName) == "string" and particleName ~= ""
+		local keywords = pathToKeywords(particlePath)
+		local hasPath = #keywords > 0
+		if LibrarySet[id] then
+			-- already in the library: only fill in the name / path if they were missing
+			if hasName and not LibraryNames[id] then
+				LibraryNames[id] = particleName
+			end
+			if hasPath and not LibraryKeywords[id] then
+				LibraryKeywords[id] = keywords
+			end
+			return false
+		end
+		LibrarySet[id] = true
+		TextureLibrary[#TextureLibrary + 1] = id
+		if hasName then
+			LibraryNames[id] = particleName
+		end
+		if hasPath then
+			LibraryKeywords[id] = keywords
+		end
+		return true
+	end
+
+	removeTextureFromLibrary = function(raw)
+		local id = normalizeTextureId(raw)
+		if not id or not LibrarySet[id] then return false end
+		LibrarySet[id] = nil
+		LibraryNames[id] = nil
+		LibraryKeywords[id] = nil
+		Flip.Grids[id] = nil
+		for i = #TextureLibrary, 1, -1 do
+			if TextureLibrary[i] == id then
+				table.remove(TextureLibrary, i)
+				break
+			end
+		end
+		return true
+	end
+end
+
+loadLibraryFromDisk()
+
+-- ===================== FAVOURITES =====================
+
+local FavouritesList = {}
+local rebuildFavouritesList
+local loadFavouritesFromDisk
+local isFavourited
+local removeFavourite
+local toggleFavourite
+
+do
+	local FavouritesMap = {}
+
+	local function favParticleFile(index)
+		return FAV_FOLDER .. "/fav_" .. string.format("%06d", index) .. ".json"
+	end
+
+	local function loadFavIndex()
+		local index = readJSON(FAV_INDEX_FILE)
+		if type(index) ~= "table" then
+			return {
+				Version = 1,
+				Count = 0,
+				Particles = {}
+			}
+		end
+		index.Particles = index.Particles or {}
+		index.Count = tonumber(index.Count) or 0
+		return index
+	end
+
+	local function saveFavIndex(index)
+		return writeJSON(FAV_INDEX_FILE, index)
+	end
+
+	local function cleanupOldFavFiles(keepCount)
+		for _, path in ipairs(listFolder(FAV_FOLDER)) do
+			local name = basename(path)
+			local n = tonumber(name:match("^fav_(%d+)%.json$"))
+			if n and n > keepCount then
+				deleteFile(path)
+			end
+		end
+	end
+
+	local function saveFavParticleFile(index, data)
+		local path = favParticleFile(index)
+		local ok, err = writeJSON(path, data)
+		if ok then return true end
+		if type(data) == "table" and data.Attributes then
+			local stripped = {}
+			for k, v in pairs(data) do
+				if k ~= "Attributes" then
+					stripped[k] = v
+				end
+			end
+			ok, err = writeJSON(path, stripped)
+			if ok then return true end
+		end
+		local minimal = {
+			Name = tostring(data and data.Name or "Particle"),
+			Class = tostring(data and data.Class or "ParticleEmitter"),
+			Path = tostring(data and data.Path or ""),
+			Texture = tostring(data and data.Texture or ""),
+			EmitCount = tonumber(data and data.EmitCount) or 1,
+			Properties = (type(data) == "table" and type(data.Properties) == "table") and data.Properties or {},
+			Attributes = {}
+		}
+		ok, err = writeJSON(path, minimal)
+		if ok then return true end
+		return false, err or "save failed"
+	end
+
+	local function makeFavKey(data)
+		if type(data) ~= "table" then return nil end
+		local path = tostring(data.Path or "")
+		local name = tostring(data.Name or "")
+		local tex = tostring(data.Texture or "")
+		return path .. "|" .. name .. "|" .. tex
+	end
+
+	rebuildFavouritesList = function()
+		FavouritesList = {}
+		for _, data in pairs(FavouritesMap) do
+			FavouritesList[#FavouritesList + 1] = data
+		end
+		table.sort(FavouritesList, function(a, b)
+			local pa = tostring(a.Path or ""):lower()
+			local pb = tostring(b.Path or ""):lower()
+			if pa == pb then
+				return tostring(a.Name or ""):lower() < tostring(b.Name or ""):lower()
+			end
+			return pa < pb
+		end)
+	end
+
+	loadFavouritesFromDisk = function()
+		ensureFolder(FAV_FOLDER)
+		table.clear(FavouritesMap)
+		local idx = loadFavIndex()
+		local particles = idx.Particles or {}
+		local entries = {}
+		for _, v in pairs(particles) do
+			if type(v) == "table" and v.File then
+				entries[#entries + 1] = v
+			end
+		end
+		for _, pData in ipairs(entries) do
+			local filePath = joinPath(FAV_FOLDER, pData.File)
+			local fullData = loadParticleFile(filePath)
+			if fullData then
+				local key = makeFavKey(fullData)
+				if key then
+					FavouritesMap[key] = fullData
+				end
+			end
+		end
+		rebuildFavouritesList()
+	end
+
+	local function persistFavourites()
+		ensureFolder(ROOT_FOLDER)
+		ensureFolder(FAV_FOLDER)
+		rebuildFavouritesList()
+		local index = {
+			Version = 1,
+			Count = 0,
+			Particles = {}
+		}
+		local savedCount = 0
+		for _, data in ipairs(FavouritesList) do
+			local entry = data
+			if type(entry) ~= "table" then
+				entry = {
+					Name = "Particle",
+					Class = "ParticleEmitter",
+					Path = "",
+					Texture = "",
+					EmitCount = 1,
+					Properties = {},
+					Attributes = {}
+				}
+			end
+			local filename = "fav_" .. string.format("%06d", savedCount + 1) .. ".json"
+			local ok = saveFavParticleFile(savedCount + 1, entry)
+			if ok then
+				savedCount = savedCount + 1
+				index.Particles[savedCount] = {
+					File = filename,
+					Name = tostring(entry.Name or "Particle"),
+					Class = tostring(entry.Class or "ParticleEmitter"),
+					Path = tostring(entry.Path or ""),
+					EmitCount = tonumber(entry.EmitCount) or 1
+				}
+			end
+		end
+		index.Count = savedCount
+		cleanupOldFavFiles(savedCount)
+		saveFavIndex(index)
+		return savedCount
+	end
+
+	isFavourited = function(o)
+		local data = getInfo(o)
+		local key = makeFavKey(data)
+		return key and FavouritesMap[key] ~= nil
+	end
+
+	local function addFavourite(o)
+		local data = getInfo(o)
+		if type(data) ~= "table" then return false end
+		local snapshot = {
+			Name = tostring(data.Name or "Particle"),
+			Class = tostring(data.Class or "ParticleEmitter"),
+			Path = tostring(data.Path or ""),
+			Texture = tostring(data.Texture or ""),
+			EmitCount = tonumber(data.EmitCount) or 1,
+			Properties = type(data.Properties) == "table" and data.Properties or {},
+			Attributes = type(data.Attributes) == "table" and data.Attributes or {}
+		}
+		local key = makeFavKey(snapshot)
+		if not key then return false end
+		if FavouritesMap[key] then return true end
+		FavouritesMap[key] = snapshot
+		rebuildFavouritesList()
+		persistFavourites()
+		return true
+	end
+
+	removeFavourite = function(o)
+		local data = getInfo(o)
+		local key = makeFavKey(data)
+		if not key or not FavouritesMap[key] then return false end
+		FavouritesMap[key] = nil
+		rebuildFavouritesList()
+		persistFavourites()
+		return true
+	end
+
+	toggleFavourite = function(o)
+		if isFavourited(o) then
+			return removeFavourite(o), false
+		else
+			return addFavourite(o), true
+		end
+	end
+end
+
+loadFavouritesFromDisk()
+
+-- ===================== GUI =====================
+
+do
+	local hostOk, host = pcall(function()
+		return gethui and gethui()
+	end)
+	for _, parent in ipairs({ CoreGui, (hostOk and typeof(host) == "Instance") and host or CoreGui }) do
+		local old = parent:FindFirstChild("ParticleInspector")
+		if old then old:Destroy() end
+	end
+end
+
+-- Brushed-steel theme (lighter base colours so the metal gradients still read well)
+local C = {
+	bg         = Color3.fromRGB(49, 50, 51),
+	surface    = Color3.fromRGB(72, 73, 75),
+	surface2   = Color3.fromRGB(88, 89, 92),
+	surface3   = Color3.fromRGB(125, 126, 129),
+	border     = Color3.fromRGB(20, 20, 20),
+	borderSoft = Color3.fromRGB(30, 30, 30),
+	text       = Color3.fromRGB(255, 255, 255),
+	textDim    = Color3.fromRGB(221, 221, 221),
+	textMuted  = Color3.fromRGB(170, 170, 170),
+	accent     = Color3.fromRGB(88, 160, 56),
+	accentSoft = Color3.fromRGB(60, 120, 40),
+	accentHover= Color3.fromRGB(60, 120, 40),
+	green      = Color3.fromRGB(96, 178, 64),
+	greenDark  = Color3.fromRGB(62, 128, 40),
+	red        = Color3.fromRGB(205, 70, 60),
+	redDark    = Color3.fromRGB(150, 48, 42),
+	orange     = Color3.fromRGB(240, 176, 48),
+	heart      = Color3.fromRGB(235, 70, 70),
+	heartBg    = Color3.fromRGB(110, 44, 44),
+	row        = Color3.fromRGB(96, 97, 100),
+	rowHover   = Color3.fromRGB(122, 123, 127),
+	rowSelect  = Color3.fromRGB(66, 120, 46),
+	input      = Color3.fromRGB(24, 24, 25),
+	tabActive  = Color3.fromRGB(88, 160, 56),
+	tabIdle    = Color3.fromRGB(196, 196, 198),
+	channel    = Color3.fromRGB(88, 89, 92),
+}
+
+-- ===================== METAL / SHINE HELPERS =====================
+-- Everything shiny lives inside this one table.
+
+local Metal = {}
+
+-- Vertical brightness curves (1 = full colour, lower = darker).
+-- The little bump right after the middle is the chrome "horizon" line.
+Metal.RAISED = {
+	{ 0.00, 1.00 },
+	{ 0.20, 0.93 },
+	{ 0.48, 0.80 },
+	{ 0.54, 0.89 },
+	{ 1.00, 0.72 },
+}
+Metal.INSET = {
+	{ 0.00, 0.72 },
+	{ 0.50, 0.83 },
+	{ 1.00, 0.97 },
+}
+Metal.BAR = {
+	{ 0.00, 1.00 },
+	{ 0.26, 0.93 },
+	{ 0.50, 0.82 },
+	{ 0.58, 0.90 },
+	{ 0.66, 0.78 },
+	{ 1.00, 0.78 },
+}
+Metal.BAR_BOTTOM = 1
+Metal.strokeGrad = nil
+Metal.Conns = {}
+Metal.FilterAgain = false
+
+-- Picture icons on buttons: the picture shows while the button is idle, and the
+-- button text ("+3", "FAILED", "SAVING..." ...) shows instead during feedback.
+Metal.ICON_SAVE = "rbxassetid://82629296020624"
+Metal.ICON_SEARCH = "rbxassetid://104148869602622"
+Metal.ICON_DELETE = "rbxassetid://137246078911422"
+Metal.ICON_COPY = "rbxassetid://87588920601893"
+Metal.ICON_FLIP_ANIM = "rbxassetid://90837140373377"
+
+function Metal.icon(btn, assetId, idleText)
+	if not btn then return nil end
+	local img = Instance.new("ImageLabel")
+	img.Name = "ButtonIcon"
+	img.AnchorPoint = Vector2.new(0.5, 0.5)
+	img.Position = UDim2.fromScale(0.5, 0.5)
+	img.SizeConstraint = Enum.SizeConstraint.RelativeYY
+	img.Size = UDim2.fromScale(0.68, 0.68)
+	img.BackgroundTransparency = 1
+	img.Image = assetId
+	img.ScaleType = Enum.ScaleType.Fit
+	img.Active = false
+	img.ZIndex = btn.ZIndex + 5
+	img.Parent = btn
+	local function refresh()
+		local idle = (btn.Text == idleText) or (btn.Text == "")
+		img.Visible = idle
+		btn.TextTransparency = idle and 1 or 0
+	end
+	btn:GetPropertyChangedSignal("Text"):Connect(refresh)
+	refresh()
+	return img
+end
+
+function Metal.shade(c, f)
+	return Color3.new(
+		math.clamp(c.R * f, 0, 1),
+		math.clamp(c.G * f, 0, 1),
+		math.clamp(c.B * f, 0, 1)
+	)
+end
+
+-- Pocket-edition style: flat blocky panels with a light top/left edge and a dark bottom/right edge.
+local function bevelFrame(parent, name, size, pos, color, transparency)
+	local f = Instance.new("Frame")
+	f.Name = name
+	f.Size = size
+	f.Position = pos
+	f.BackgroundColor3 = color
+	f.BackgroundTransparency = transparency
+	f.BorderSizePixel = 0
+	f.Active = false
+	f.ZIndex = parent.ZIndex + 1
+	pcall(function()
+		f.Interactable = false
+	end)
+	f.Parent = parent
+	return f
+end
+
+function Metal.panel(inst, style, strength)
+	if not inst then return nil end
+	for _, n in ipairs({ "MetalGradient", "PanelStroke", "BevelTop", "BevelBottom" }) do
+		local old = inst:FindFirstChild(n)
+		if old then old:Destroy() end
+	end
+
+	if style == "inset" then
+		local s = Instance.new("UIStroke")
+		s.Name = "PanelStroke"
+		s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+		s.Color = Color3.fromRGB(8, 8, 8)
+		s.Thickness = 2
+		s.Parent = inst
+		return s
+	end
+
+	local light = (style == "bar") and 0.7 or 0.82
+	bevelFrame(inst, "BevelTop", UDim2.new(1, 0, 0, 2), UDim2.fromOffset(0, 0), Color3.new(1, 1, 1), light)
+	bevelFrame(inst, "BevelBottom", UDim2.new(1, 0, 0, 2), UDim2.new(0, 0, 1, -2), Color3.new(0, 0, 0), 0.65)
+	return nil
+end
+
+-- Blocky beveled button look (black outline, light top/left, dark bottom/right). Never blocks clicks.
+function Metal.gloss(btn, radius, intensity)
+	if not btn then return nil end
+	local existing = btn:FindFirstChild("MetalGloss")
+	if existing then return existing end
+
+	local g = Instance.new("Frame")
+	g.Name = "MetalGloss"
+	g.Size = UDim2.fromScale(1, 1)
+	g.Position = UDim2.fromScale(0, 0)
+	g.BackgroundTransparency = 1
+	g.BorderSizePixel = 0
+	g.Active = false
+	g.ZIndex = btn.ZIndex + 1
+	pcall(function()
+		g.Interactable = false
+	end)
+	g.Parent = btn
+
+	local outline = Instance.new("UIStroke")
+	outline.Name = "BevelStroke"
+	outline.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	outline.Color = Color3.fromRGB(10, 10, 10)
+	outline.Thickness = 2
+	outline.Parent = g
+
+	bevelFrame(g, "EdgeTop", UDim2.new(1, 0, 0, 2), UDim2.fromOffset(0, 0), Color3.new(1, 1, 1), 0.55)
+	bevelFrame(g, "EdgeLeft", UDim2.new(0, 2, 1, 0), UDim2.fromOffset(0, 0), Color3.new(1, 1, 1), 0.7)
+	bevelFrame(g, "EdgeBottom", UDim2.new(1, 0, 0, 3), UDim2.new(0, 0, 1, -3), Color3.new(0, 0, 0), 0.5)
+	bevelFrame(g, "EdgeRight", UDim2.new(0, 2, 1, 0), UDim2.new(1, -2, 0, 0), Color3.new(0, 0, 0), 0.65)
+
+	return g
+end
+
+-- Titles stay plain white (no chrome gradient in this style)
+function Metal.chrome(label)
+	return nil
+end
+
+-- ===================== ANIMATION HELPERS =====================
+-- Every animation in the GUI goes through this one table.
+
+local Anim = {}
+
+local SKIP_FADE = {
+	HoverStroke = true,
+	PulseStroke = true,
+	FocusStroke = true,
+}
+
+Anim.NoTween = {
+	Cancel = function() end,
+	Play = function() end,
+	Pause = function() end,
+}
+
+-- Plays a real tween. If the tween cannot be made, the values are applied instantly.
+function Anim.tween(inst, time, props, style, dir)
+	if not inst or type(props) ~= "table" then return Anim.NoTween end
+	for k, v in pairs(props) do
+		pcall(function()
+			inst[k] = v
+		end)
+	end
+	return Anim.NoTween
+end
+-- Smooth background colour change
+local function setBg(inst, color, t)
+	Anim.tween(inst, t or 0.18, { BackgroundColor3 = color })
+end
+
+local function transparencyProps(o, useCurrent)
+	local p = nil
+	if o:IsA("GuiObject") then
+		p = { BackgroundTransparency = useCurrent and o.BackgroundTransparency or 1 }
+		if o:IsA("TextLabel") or o:IsA("TextButton") or o:IsA("TextBox") then
+			p.TextTransparency = useCurrent and o.TextTransparency or 1
+		end
+		if o:IsA("ImageLabel") or o:IsA("ImageButton") then
+			p.ImageTransparency = useCurrent and o.ImageTransparency or 1
+		end
+	elseif o:IsA("UIStroke") then
+		p = { Transparency = useCurrent and o.Transparency or 1 }
+	end
+	return p
+end
+
+-- Fades a whole piece of GUI in (everything starts invisible, then appears)
+function Anim.fadeIn(root, delay, duration)
+	return
+end
+-- Fades a whole piece of GUI out
+function Anim.fadeOut(root, duration)
+	return
+end
+-- Hover glow + press feedback for buttons
+function Anim.button(btn, opts)
+	if not btn then return nil end
+	if btn:FindFirstChild("HoverStroke") then return nil end
+	opts = opts or {}
+	local hoverT = opts.hoverTransparency or 0.35
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Name = "HoverStroke"
+	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	stroke.Color = opts.color or Color3.fromRGB(235, 240, 255)
+	stroke.Thickness = 1.2
+	stroke.Transparency = 1
+	stroke.Parent = btn
+
+	local hovering = false
+
+	btn.MouseEnter:Connect(function()
+		hovering = true
+		Anim.tween(stroke, 0.15, { Transparency = hoverT })
+	end)
+	btn.MouseLeave:Connect(function()
+		hovering = false
+		Anim.tween(stroke, 0.2, { Transparency = 1, Thickness = 1.2 })
+	end)
+	btn.MouseButton1Down:Connect(function()
+		Anim.tween(stroke, 0.07, { Thickness = 2.6, Transparency = 0 })
+	end)
+	btn.MouseButton1Up:Connect(function()
+		Anim.tween(stroke, 0.2, { Thickness = 1.2, Transparency = hovering and hoverT or 1 }, Enum.EasingStyle.Back)
+	end)
+	return stroke
+end
+
+-- Light hover colour fade (used on very long lists)
+function Anim.rowHover(row, baseColor, hoverColor)
+	row.MouseEnter:Connect(function()
+		Anim.tween(row, 0.12, { BackgroundColor3 = hoverColor })
+	end)
+	row.MouseLeave:Connect(function()
+		Anim.tween(row, 0.18, { BackgroundColor3 = baseColor })
+	end)
+end
+
+-- Quick side-to-side shake
+function Anim.shake(inst)
+	return
+end
+local GUI = Instance.new("ScreenGui")
+GUI.Name = "ParticleInspector"
+GUI.ResetOnSpawn = false
+GUI.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+do
+	local hostOk, host = pcall(function()
+		return gethui and gethui()
+	end)
+	GUI.Parent = (hostOk and typeof(host) == "Instance") and host or CoreGui
+end
+
+local Main = Instance.new("Frame")
+Main.Name = "Main"
+Main.Size = UDim2.fromOffset(460, 340)
+Main.Position = UDim2.new(0.5, -230, 0.5, -170)
+Main.BackgroundColor3 = C.bg
+Main.BorderSizePixel = 0
+Main.ClipsDescendants = true
+Main.Parent = GUI
+
+do
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 0)
+	corner.Parent = Main
+
+	-- Metallic border: white stroke coloured by a silver gradient that slowly rotates
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = Color3.new(1, 1, 1)
+	stroke.Thickness = 3
+	stroke.Transparency = 0
+	stroke.Parent = Main
+
+	local strokeGrad = Instance.new("UIGradient")
+	strokeGrad.Color = ColorSequence.new(Color3.fromRGB(10, 10, 10))
+	strokeGrad.Parent = stroke
+	Metal.strokeGrad = strokeGrad
+end
+Metal.panel(Main, "raised", 0.6)
+
+-- Title bar
+local Top = Instance.new("Frame")
+Top.Name = "Top"
+Top.Size = UDim2.new(1, 0, 0, 40)
+Top.BackgroundColor3 = C.bg
+Top.BorderSizePixel = 0
+Top.Parent = Main
+
+Instance.new("UICorner", Top).CornerRadius = UDim.new(0, 0)
+Metal.panel(Top, "bar", 1)
+
+-- Strip that squares off the bottom corners of the title bar (same colour as the bottom of its gradient)
+local TopFix = Instance.new("Frame")
+TopFix.Size = UDim2.new(1, 0, 0, 12)
+TopFix.Position = UDim2.new(0, 0, 1, -12)
+TopFix.BackgroundColor3 = Metal.shade(C.bg, Metal.BAR_BOTTOM)
+TopFix.BorderSizePixel = 0
+TopFix.Parent = Top
+
+do
+	local divider = Instance.new("Frame")
+	divider.Size = UDim2.new(1, 0, 0, 1)
+	divider.Position = UDim2.new(0, 0, 1, 0)
+	divider.BackgroundColor3 = C.border
+	divider.BorderSizePixel = 0
+	divider.Parent = Top
+end
+
+local TitleIcon = Instance.new("TextLabel")
+TitleIcon.Size = UDim2.fromOffset(22, 40)
+TitleIcon.Position = UDim2.fromOffset(12, 0)
+TitleIcon.BackgroundTransparency = 1
+TitleIcon.Text = "#"
+TitleIcon.TextColor3 = C.textMuted
+TitleIcon.Font = Enum.Font.Arcade
+TitleIcon.TextSize = 16
+TitleIcon.Parent = Top
+
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, -200, 1, 0)
+Title.Position = UDim2.fromOffset(34, 0)
+Title.BackgroundTransparency = 1
+Title.Text = "particle-inspector"
+Title.TextColor3 = C.text
+Title.Font = Enum.Font.Arcade
+Title.TextSize = 14
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.TextTruncate = Enum.TextTruncate.AtEnd
+Title.Parent = Top
+Metal.chrome(Title)
+
+local Status = Instance.new("TextLabel")
+Status.Name = "Status"
+Status.Size = UDim2.fromOffset(80, 40)
+Status.Position = UDim2.new(1, -220, 0, 0)
+Status.BackgroundTransparency = 1
+Status.Text = "0"
+Status.TextColor3 = C.textMuted
+Status.Font = Enum.Font.Arcade
+Status.TextSize = 11
+Status.Parent = Top
+
+-- Flipbook animation toggle (default OFF — previews stay still until turned on)
+local FlipAnimBtn = Instance.new("TextButton")
+FlipAnimBtn.Name = "FlipAnim"
+FlipAnimBtn.Size = UDim2.fromOffset(34, 40)
+FlipAnimBtn.Position = UDim2.new(1, -140, 0, 0)
+FlipAnimBtn.BackgroundTransparency = 1
+FlipAnimBtn.BackgroundColor3 = C.accent
+FlipAnimBtn.BorderSizePixel = 0
+FlipAnimBtn.AutoButtonColor = false
+FlipAnimBtn.Text = ""
+FlipAnimBtn.TextColor3 = C.textMuted
+FlipAnimBtn.Font = Enum.Font.Arcade
+FlipAnimBtn.TextSize = 10
+FlipAnimBtn.Parent = Top
+do
+	local gl = Metal.gloss(FlipAnimBtn, 4)
+	if gl then gl.Visible = false end
+	local img = Instance.new("ImageLabel")
+	img.Name = "Icon"
+	img.AnchorPoint = Vector2.new(0.5, 0.5)
+	img.Position = UDim2.fromScale(0.5, 0.5)
+	img.SizeConstraint = Enum.SizeConstraint.RelativeYY
+	img.Size = UDim2.fromScale(0.55, 0.55)
+	img.BackgroundTransparency = 1
+	img.Image = Metal.ICON_FLIP_ANIM
+	img.ImageColor3 = C.textMuted
+	img.ScaleType = Enum.ScaleType.Fit
+	img.Active = false
+	img.ZIndex = FlipAnimBtn.ZIndex + 5
+	img.Parent = FlipAnimBtn
+end
+
+local function refreshFlipAnimBtn()
+	local on = Flip.Animate == true
+	local img = FlipAnimBtn:FindFirstChild("Icon")
+	local gloss = FlipAnimBtn:FindFirstChild("MetalGloss")
+	if on then
+		Anim.tween(FlipAnimBtn, 0.15, {
+			BackgroundTransparency = 0,
+			BackgroundColor3 = C.accent,
+		})
+		if img then
+			Anim.tween(img, 0.15, { ImageColor3 = Color3.new(1, 1, 1) })
+		end
+		if gloss then gloss.Visible = true end
+	else
+		Anim.tween(FlipAnimBtn, 0.15, {
+			BackgroundTransparency = 1,
+		})
+		if img then
+			Anim.tween(img, 0.15, { ImageColor3 = C.textMuted })
+		end
+		if gloss then gloss.Visible = false end
+	end
+end
+
+FlipAnimBtn.MouseButton1Click:Connect(function()
+	Flip.setAnimate(not Flip.Animate)
+	refreshFlipAnimBtn()
+end)
+
+FlipAnimBtn.MouseEnter:Connect(function()
+	if not Flip.Animate then
+		local img = FlipAnimBtn:FindFirstChild("Icon")
+		if img then Anim.tween(img, 0.12, { ImageColor3 = C.text }) end
+	end
+end)
+
+FlipAnimBtn.MouseLeave:Connect(function()
+	refreshFlipAnimBtn()
+end)
+
+-- Info-only button (hides everything except the info panel)
+local InfoBtn = Instance.new("TextButton")
+InfoBtn.Name = "InfoOnly"
+InfoBtn.Size = UDim2.fromOffset(34, 40)
+InfoBtn.Position = UDim2.new(1, -106, 0, 0)
+InfoBtn.BackgroundTransparency = 1
+InfoBtn.BackgroundColor3 = C.accent
+InfoBtn.BorderSizePixel = 0
+InfoBtn.AutoButtonColor = false
+InfoBtn.Text = "i"
+InfoBtn.TextColor3 = C.textMuted
+InfoBtn.Font = Enum.Font.Arcade
+InfoBtn.TextSize = 14
+InfoBtn.Parent = Top
+do
+	-- gloss only shows while info-only mode is on
+	local gl = Metal.gloss(InfoBtn, 4)
+	if gl then gl.Visible = false end
+end
+
+local Min = Instance.new("TextButton")
+Min.Name = "Min"
+Min.Size = UDim2.fromOffset(34, 40)
+Min.Position = UDim2.new(1, -70, 0, 0)
+Min.BackgroundTransparency = 1
+Min.BackgroundColor3 = C.surface3
+Min.BorderSizePixel = 0
+Min.AutoButtonColor = false
+Min.Text = "—"
+Min.TextColor3 = C.textMuted
+Min.Font = Enum.Font.Arcade
+Min.TextSize = 14
+Min.Parent = Top
+
+local Close = Instance.new("TextButton")
+Close.Name = "Close"
+Close.Size = UDim2.fromOffset(34, 40)
+Close.Position = UDim2.new(1, -34, 0, 0)
+Close.BackgroundTransparency = 1
+Close.BackgroundColor3 = C.red
+Close.BorderSizePixel = 0
+Close.AutoButtonColor = false
+Close.Text = "×"
+Close.TextColor3 = C.textMuted
+Close.Font = Enum.Font.Arcade
+Close.TextSize = 18
+Close.Parent = Top
+
+Close.MouseEnter:Connect(function()
+	Anim.tween(Close, 0.15, {
+		BackgroundTransparency = 0,
+		BackgroundColor3 = C.red,
+		TextColor3 = Color3.new(1, 1, 1),
+	})
+end)
+Close.MouseLeave:Connect(function()
+	Anim.tween(Close, 0.2, {
+		BackgroundTransparency = 1,
+		TextColor3 = C.textMuted,
+	})
+end)
+
+Min.MouseEnter:Connect(function()
+	Anim.tween(Min, 0.15, { BackgroundTransparency = 0.45, TextColor3 = C.text })
+end)
+Min.MouseLeave:Connect(function()
+	Anim.tween(Min, 0.2, { BackgroundTransparency = 1, TextColor3 = C.textMuted })
+end)
+
+-- Body
+local Body = Instance.new("Frame")
+Body.Name = "Body"
+Body.Size = UDim2.new(1, 0, 1, -40)
+Body.Position = UDim2.fromOffset(0, 40)
+Body.BackgroundColor3 = C.surface
+Body.BorderSizePixel = 0
+Body.Parent = Main
+Metal.panel(Body, "raised", 0.5)
+
+-- Tab bar
+local PageButtons = Instance.new("Frame")
+PageButtons.Name = "PageButtons"
+PageButtons.Size = UDim2.new(1, -16, 0, 32)
+PageButtons.Position = UDim2.fromOffset(8, 8)
+PageButtons.BackgroundColor3 = C.bg
+PageButtons.BorderSizePixel = 0
+PageButtons.Parent = Body
+
+Instance.new("UICorner", PageButtons).CornerRadius = UDim.new(0, 0)
+Metal.panel(PageButtons, "inset", 1)
+
+-- Sliding highlight that glides behind the active tab
+local TabIndicator = Instance.new("Frame")
+TabIndicator.Name = "TabIndicator"
+TabIndicator.Size = UDim2.new(0.2, -2, 1, -4)
+TabIndicator.Position = UDim2.new(0, 1, 0, 2)
+TabIndicator.BackgroundColor3 = C.surface3
+TabIndicator.BorderSizePixel = 0
+TabIndicator.Parent = PageButtons
+Instance.new("UICorner", TabIndicator).CornerRadius = UDim.new(0, 0)
+Metal.gloss(TabIndicator, 4)
+do
+	local bar = Instance.new("Frame")
+	bar.Name = "AccentBar"
+	bar.Size = UDim2.new(1, -16, 0, 2)
+	bar.Position = UDim2.new(0, 8, 1, -3)
+	bar.BackgroundColor3 = C.accent
+	bar.BorderSizePixel = 0
+	bar.ZIndex = 3
+	bar.Parent = TabIndicator
+	Instance.new("UICorner", bar).CornerRadius = UDim.new(0, 0)
+end
+
+local ParticlePageButton, AutoPageButton, FavPageButton, SavedPageButton
+do
+	local function makeTab(name, pos)
+		local btn = Instance.new("TextButton")
+		btn.Size = UDim2.new(0.2, -2, 1, -4)
+		btn.Position = UDim2.new(pos, 1, 0, 2)
+		btn.BackgroundTransparency = 1
+		btn.BorderSizePixel = 0
+		btn.AutoButtonColor = false
+		btn.Text = name
+		btn.TextColor3 = C.tabIdle
+		btn.Font = Enum.Font.Arcade
+		btn.TextSize = 10
+		btn.Parent = PageButtons
+		local c = Instance.new("UICorner")
+		c.CornerRadius = UDim.new(0, 0)
+		c.Parent = btn
+		btn.TextScaled = true
+		local lim = Instance.new("UITextSizeConstraint")
+		lim.MaxTextSize = 10
+		lim.MinTextSize = 6
+		lim.Parent = btn
+		return btn
+	end
+
+	ParticlePageButton = makeTab("PARTICLES", 0)
+	ParticlePageButton.TextColor3 = C.text
+
+	AutoPageButton = makeTab("AUTO SCAN", 0.2)
+	FavPageButton = makeTab("FAVOURITES", 0.4)
+	SavedPageButton = makeTab("LIBRARY", 0.6)
+	Metal.Mkt = {}
+	Metal.Mkt.TabButton = makeTab("MARKET", 0.8)
+end
+
+-- Pages
+local ParticlePage, AutoPage, FavPage, SavedPage
+do
+	local function makePage()
+		local p = Instance.new("Frame")
+		p.Size = UDim2.new(1, 0, 1, -48)
+		p.Position = UDim2.fromOffset(0, 46)
+		p.BackgroundTransparency = 1
+		p.Parent = Body
+		return p
+	end
+
+	ParticlePage = makePage()
+	AutoPage = makePage()
+	AutoPage.Visible = false
+	FavPage = makePage()
+	FavPage.Visible = false
+	SavedPage = makePage()
+	SavedPage.Visible = false
+	Metal.Mkt.PageFrame = makePage()
+	Metal.Mkt.PageFrame.Visible = false
+end
+
+-- ===== PARTICLES PAGE =====
+-- Search bar: all children use absolute offsets; layoutParticlePage sets every size each resize
+local SearchBar = Instance.new("Frame")
+SearchBar.Name = "SearchBar"
+SearchBar.Size = UDim2.fromOffset(444, 24)
+SearchBar.Position = UDim2.fromOffset(8, 0)
+SearchBar.BackgroundTransparency = 1
+SearchBar.ClipsDescendants = true
+SearchBar.Parent = ParticlePage
+
+local Search = Instance.new("TextBox")
+Search.Name = "Search"
+Search.Size = UDim2.fromOffset(260, 24)
+Search.Position = UDim2.fromOffset(0, 0)
+Search.BackgroundColor3 = C.input
+Search.BorderSizePixel = 0
+Search.PlaceholderText = "  Search name or path..."
+Search.Text = ""
+Search.TextColor3 = C.text
+Search.PlaceholderColor3 = C.textMuted
+Search.Font = Enum.Font.Arcade
+Search.TextSize = 11
+Search.ClearTextOnFocus = false
+Search.Parent = SearchBar
+Instance.new("UICorner", Search).CornerRadius = UDim.new(0, 0)
+do
+	local searchPad = Instance.new("UIPadding")
+	searchPad.PaddingLeft = UDim.new(0, 4)
+	searchPad.Parent = Search
+
+	-- Glow ring that fades in while typing
+	local focusStroke = Instance.new("UIStroke")
+	focusStroke.Name = "FocusStroke"
+	focusStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	focusStroke.Color = C.accent
+	focusStroke.Thickness = 1.5
+	focusStroke.Transparency = 1
+	focusStroke.Parent = Search
+	Search.Focused:Connect(function()
+		Anim.tween(focusStroke, 0.2, { Transparency = 0.05 })
+	end)
+	Search.FocusLost:Connect(function()
+		Anim.tween(focusStroke, 0.3, { Transparency = 1 })
+	end)
+end
+
+local Refresh, ClearBtn, Save
+do
+	local function makeActionBtn(text, bg, w)
+		local b = Instance.new("TextButton")
+		b.Size = UDim2.fromOffset(w, 24)
+		b.Position = UDim2.fromOffset(0, 0)
+		b.BackgroundColor3 = bg
+		b.BorderSizePixel = 0
+		b.AutoButtonColor = false
+		b.Text = text
+		b.TextColor3 = C.text
+		b.Font = Enum.Font.Arcade
+		b.TextSize = 10
+		b.Parent = SearchBar
+		Instance.new("UICorner", b).CornerRadius = UDim.new(0, 0)
+		Metal.gloss(b, 5)
+		Anim.button(b)
+		return b
+	end
+
+	Refresh = makeActionBtn("Refresh", C.surface3, 58)
+	ClearBtn = makeActionBtn("CLEAR", C.redDark, 52)
+	Save = makeActionBtn("SAVE", C.accent, 52)
+	Metal.icon(Save, Metal.ICON_SAVE, "SAVE")
+end
+
+local List = Instance.new("ScrollingFrame")
+List.Name = "List"
+List.Size = UDim2.fromOffset(220, 250)
+List.Position = UDim2.fromOffset(8, 38)
+List.BackgroundColor3 = C.bg
+List.BorderSizePixel = 0
+List.ScrollBarThickness = 4
+List.ScrollBarImageColor3 = C.border
+List.CanvasSize = UDim2.new()
+List.Parent = ParticlePage
+Instance.new("UICorner", List).CornerRadius = UDim.new(0, 0)
+Metal.panel(List, "inset", 0.7)
+
+local ListContent = Instance.new("Frame")
+ListContent.Name = "ListContent"
+ListContent.Size = UDim2.new(1, -4, 0, 1)
+ListContent.BackgroundTransparency = 1
+ListContent.Parent = List
+
+local Info = Instance.new("Frame")
+Info.Name = "Info"
+Info.Size = UDim2.fromOffset(210, 250)
+Info.Position = UDim2.fromOffset(238, 38)
+Info.BackgroundColor3 = C.bg
+Info.BorderSizePixel = 0
+Info.Parent = ParticlePage
+Instance.new("UICorner", Info).CornerRadius = UDim.new(0, 0)
+Metal.panel(Info, "inset", 0.7)
+
+local InfoTitle = Instance.new("TextLabel")
+InfoTitle.Name = "InfoTitle"
+InfoTitle.Size = UDim2.new(1, -130, 0, 28)
+InfoTitle.Position = UDim2.fromOffset(10, 4)
+InfoTitle.BackgroundTransparency = 1
+InfoTitle.Text = "Select a particle"
+InfoTitle.TextColor3 = C.text
+InfoTitle.Font = Enum.Font.Arcade
+InfoTitle.TextSize = 13
+InfoTitle.TextXAlignment = Enum.TextXAlignment.Left
+InfoTitle.TextTruncate = Enum.TextTruncate.AtEnd
+InfoTitle.Parent = Info
+Metal.chrome(InfoTitle)
+
+local FavButton = Instance.new("TextButton")
+FavButton.Name = "FavButton"
+FavButton.Size = UDim2.fromOffset(36, 26)
+FavButton.Position = UDim2.new(1, -124, 0, 5)
+FavButton.BackgroundColor3 = C.surface3
+FavButton.BorderSizePixel = 0
+FavButton.AutoButtonColor = false
+FavButton.Text = "♥"
+FavButton.TextColor3 = C.textDim
+FavButton.Font = Enum.Font.Arcade
+FavButton.TextSize = 13
+FavButton.Parent = Info
+Instance.new("UICorner", FavButton).CornerRadius = UDim.new(0, 0)
+Metal.gloss(FavButton, 4)
+Anim.button(FavButton, { color = C.heart })
+
+local PreviewButton = Instance.new("TextButton")
+PreviewButton.Name = "PreviewButton"
+PreviewButton.Size = UDim2.fromOffset(74, 26)
+PreviewButton.Position = UDim2.new(1, -82, 0, 5)
+PreviewButton.BackgroundColor3 = C.accent
+PreviewButton.BorderSizePixel = 0
+PreviewButton.AutoButtonColor = false
+PreviewButton.Text = "PREVIEW"
+PreviewButton.TextColor3 = C.text
+PreviewButton.Font = Enum.Font.Arcade
+PreviewButton.TextSize = 10
+PreviewButton.Parent = Info
+Instance.new("UICorner", PreviewButton).CornerRadius = UDim.new(0, 0)
+Metal.gloss(PreviewButton, 4)
+Anim.button(PreviewButton)
+
+local InfoScroll = Instance.new("ScrollingFrame")
+InfoScroll.Name = "InfoScroll"
+InfoScroll.Size = UDim2.new(1, -12, 1, -38)
+InfoScroll.Position = UDim2.fromOffset(6, 34)
+InfoScroll.BackgroundTransparency = 1
+InfoScroll.BorderSizePixel = 0
+InfoScroll.ScrollBarThickness = 4
+InfoScroll.ScrollBarImageColor3 = C.border
+InfoScroll.CanvasSize = UDim2.new()
+InfoScroll.Parent = Info
+
+local InfoLayout = Instance.new("UIListLayout")
+InfoLayout.Padding = UDim.new(0, 4)
+InfoLayout.SortOrder = Enum.SortOrder.LayoutOrder
+InfoLayout.Parent = InfoScroll
+
+InfoLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+	InfoScroll.CanvasSize = UDim2.fromOffset(0, InfoLayout.AbsoluteContentSize.Y + 12)
+end)
+
+-- ===== AUTO SCAN PAGE =====
+local AutoTitle = Instance.new("TextLabel")
+AutoTitle.Size = UDim2.new(1, -180, 0, 28)
+AutoTitle.Position = UDim2.fromOffset(12, 0)
+AutoTitle.BackgroundTransparency = 1
+AutoTitle.Text = "Realtime Workspace Auto Scan"
+AutoTitle.TextColor3 = C.text
+AutoTitle.Font = Enum.Font.Arcade
+AutoTitle.TextSize = 11
+AutoTitle.TextXAlignment = Enum.TextXAlignment.Left
+AutoTitle.TextTruncate = Enum.TextTruncate.AtEnd
+AutoTitle.Parent = AutoPage
+Metal.chrome(AutoTitle)
+
+local AutoClearBtn = Instance.new("TextButton")
+AutoClearBtn.Size = UDim2.fromOffset(58, 26)
+AutoClearBtn.Position = UDim2.new(1, -178, 0, 1)
+AutoClearBtn.BackgroundColor3 = C.redDark
+AutoClearBtn.BorderSizePixel = 0
+AutoClearBtn.AutoButtonColor = false
+AutoClearBtn.Text = "CLEAR"
+AutoClearBtn.TextColor3 = C.text
+AutoClearBtn.Font = Enum.Font.Arcade
+AutoClearBtn.TextSize = 9
+AutoClearBtn.Parent = AutoPage
+Instance.new("UICorner", AutoClearBtn).CornerRadius = UDim.new(0, 0)
+Metal.gloss(AutoClearBtn, 6)
+Anim.button(AutoClearBtn)
+
+local AutoToggleBtn = Instance.new("TextButton")
+AutoToggleBtn.Size = UDim2.fromOffset(108, 26)
+AutoToggleBtn.Position = UDim2.new(1, -114, 0, 1)
+AutoToggleBtn.BackgroundColor3 = C.surface3
+AutoToggleBtn.BorderSizePixel = 0
+AutoToggleBtn.AutoButtonColor = false
+AutoToggleBtn.Text = "AUTO SCAN: OFF"
+AutoToggleBtn.TextColor3 = C.text
+AutoToggleBtn.Font = Enum.Font.Arcade
+AutoToggleBtn.TextSize = 9
+AutoToggleBtn.Parent = AutoPage
+Instance.new("UICorner", AutoToggleBtn).CornerRadius = UDim.new(0, 0)
+Metal.gloss(AutoToggleBtn, 6)
+Anim.button(AutoToggleBtn)
+
+local AutoList = Instance.new("ScrollingFrame")
+AutoList.Size = UDim2.new(1, -20, 1, -36)
+AutoList.Position = UDim2.fromOffset(10, 34)
+AutoList.BackgroundColor3 = C.bg
+AutoList.BorderSizePixel = 0
+AutoList.ScrollBarThickness = 3
+AutoList.ScrollBarImageColor3 = C.border
+AutoList.CanvasSize = UDim2.new()
+AutoList.Parent = AutoPage
+Instance.new("UICorner", AutoList).CornerRadius = UDim.new(0, 0)
+Metal.panel(AutoList, "inset", 0.7)
+
+do
+	local layout = Instance.new("UIListLayout")
+	layout.Padding = UDim.new(0, 4)
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Parent = AutoList
+
+	layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+		AutoList.CanvasSize = UDim2.fromOffset(0, layout.AbsoluteContentSize.Y + 12)
+	end)
+
+	local pad = Instance.new("UIPadding")
+	pad.PaddingTop = UDim.new(0, 6)
+	pad.PaddingBottom = UDim.new(0, 6)
+	pad.PaddingLeft = UDim.new(0, 6)
+	pad.PaddingRight = UDim.new(0, 6)
+	pad.Parent = AutoList
+end
+
+-- ===== FAVOURITES PAGE =====
+local FavHeader = Instance.new("TextLabel")
+FavHeader.Size = UDim2.new(1, -130, 0, 28)
+FavHeader.Position = UDim2.fromOffset(12, 0)
+FavHeader.BackgroundTransparency = 1
+FavHeader.Text = "Favourited particles"
+FavHeader.TextColor3 = C.text
+FavHeader.Font = Enum.Font.Arcade
+FavHeader.TextSize = 11
+FavHeader.TextXAlignment = Enum.TextXAlignment.Left
+FavHeader.TextTruncate = Enum.TextTruncate.AtEnd
+FavHeader.Parent = FavPage
+Metal.chrome(FavHeader)
+
+local FavRefresh = Instance.new("TextButton")
+FavRefresh.Size = UDim2.fromOffset(70, 26)
+FavRefresh.Position = UDim2.new(1, -82, 0, 1)
+FavRefresh.BackgroundColor3 = C.surface3
+FavRefresh.BorderSizePixel = 0
+FavRefresh.AutoButtonColor = false
+FavRefresh.Text = "REFRESH"
+FavRefresh.TextColor3 = C.text
+FavRefresh.Font = Enum.Font.Arcade
+FavRefresh.TextSize = 9
+FavRefresh.Parent = FavPage
+Instance.new("UICorner", FavRefresh).CornerRadius = UDim.new(0, 0)
+Metal.gloss(FavRefresh, 6)
+Anim.button(FavRefresh)
+
+local FavList = Instance.new("ScrollingFrame")
+FavList.Size = UDim2.new(1, -20, 1, -36)
+FavList.Position = UDim2.fromOffset(10, 34)
+FavList.BackgroundColor3 = C.bg
+FavList.BorderSizePixel = 0
+FavList.ScrollBarThickness = 3
+FavList.ScrollBarImageColor3 = C.border
+FavList.CanvasSize = UDim2.new()
+FavList.Parent = FavPage
+Instance.new("UICorner", FavList).CornerRadius = UDim.new(0, 0)
+Metal.panel(FavList, "inset", 0.7)
+
+do
+	local layout = Instance.new("UIListLayout")
+	layout.Padding = UDim.new(0, 4)
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Parent = FavList
+
+	layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+		FavList.CanvasSize = UDim2.fromOffset(0, layout.AbsoluteContentSize.Y + 12)
+	end)
+
+	local pad = Instance.new("UIPadding")
+	pad.PaddingTop = UDim.new(0, 6)
+	pad.PaddingBottom = UDim.new(0, 6)
+	pad.PaddingLeft = UDim.new(0, 6)
+	pad.PaddingRight = UDim.new(0, 6)
+	pad.Parent = FavList
+end
+
+-- ===== LIBRARY PAGE (same layout as the particles page) =====
+local Lib = {
+	Batch = 150,
+	ShowLimit = 150,
+	Selected = nil,
+	Rows = {},
+	searchToken = 0,
+}
+
+do
+	-- Search bar row
+	Lib.SearchBar = Instance.new("Frame")
+	Lib.SearchBar.Name = "LibSearchBar"
+	Lib.SearchBar.Size = UDim2.fromOffset(444, 24)
+	Lib.SearchBar.Position = UDim2.fromOffset(8, 0)
+	Lib.SearchBar.BackgroundTransparency = 1
+	Lib.SearchBar.ClipsDescendants = true
+	Lib.SearchBar.Parent = SavedPage
+
+	Lib.Search = Instance.new("TextBox")
+	Lib.Search.Name = "LibSearch"
+	Lib.Search.Size = UDim2.fromOffset(238, 24)
+	Lib.Search.Position = UDim2.fromOffset(0, 0)
+	Lib.Search.BackgroundColor3 = C.input
+	Lib.Search.BorderSizePixel = 0
+	Lib.Search.PlaceholderText = "  Search name, path or id..."
+	Lib.Search.Text = ""
+	Lib.Search.TextColor3 = C.text
+	Lib.Search.PlaceholderColor3 = C.textMuted
+	Lib.Search.Font = Enum.Font.Arcade
+	Lib.Search.TextSize = 11
+	Lib.Search.ClearTextOnFocus = false
+	Lib.Search.Parent = Lib.SearchBar
+	Instance.new("UICorner", Lib.Search).CornerRadius = UDim.new(0, 0)
+
+	local searchPad = Instance.new("UIPadding")
+	searchPad.PaddingLeft = UDim.new(0, 4)
+	searchPad.Parent = Lib.Search
+
+	local focusStroke = Instance.new("UIStroke")
+	focusStroke.Name = "FocusStroke"
+	focusStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	focusStroke.Color = C.accent
+	focusStroke.Thickness = 1.5
+	focusStroke.Transparency = 1
+	focusStroke.Parent = Lib.Search
+	Lib.Search.Focused:Connect(function()
+		Anim.tween(focusStroke, 0.2, { Transparency = 0.05 })
+	end)
+	Lib.Search.FocusLost:Connect(function()
+		Anim.tween(focusStroke, 0.3, { Transparency = 1 })
+	end)
+
+	Lib.Refresh = Instance.new("TextButton")
+	Lib.Refresh.Name = "LibRefresh"
+	Lib.Refresh.Size = UDim2.fromOffset(64, 24)
+	Lib.Refresh.Position = UDim2.fromOffset(242, 0)
+	Lib.Refresh.BackgroundColor3 = C.surface3
+	Lib.Refresh.BorderSizePixel = 0
+	Lib.Refresh.AutoButtonColor = false
+	Lib.Refresh.Text = "Refresh"
+	Lib.Refresh.TextColor3 = C.text
+	Lib.Refresh.Font = Enum.Font.Arcade
+	Lib.Refresh.TextSize = 10
+	Lib.Refresh.Parent = Lib.SearchBar
+	Instance.new("UICorner", Lib.Refresh).CornerRadius = UDim.new(0, 0)
+	Metal.gloss(Lib.Refresh, 5)
+	Anim.button(Lib.Refresh)
+
+	Lib.ClearAll = Instance.new("TextButton")
+	Lib.ClearAll.Name = "LibClearAll"
+	Lib.ClearAll.Size = UDim2.fromOffset(70, 24)
+	Lib.ClearAll.Position = UDim2.fromOffset(310, 0)
+	Lib.ClearAll.BackgroundColor3 = C.redDark
+	Lib.ClearAll.BorderSizePixel = 0
+	Lib.ClearAll.AutoButtonColor = false
+	Lib.ClearAll.Text = "CLEAR ALL"
+	Lib.ClearAll.TextColor3 = C.text
+	Lib.ClearAll.Font = Enum.Font.Arcade
+	Lib.ClearAll.TextSize = 9
+	Lib.ClearAll.Parent = Lib.SearchBar
+	Instance.new("UICorner", Lib.ClearAll).CornerRadius = UDim.new(0, 0)
+	Metal.gloss(Lib.ClearAll, 5)
+	Anim.button(Lib.ClearAll)
+
+	-- Texture list (left)
+	Lib.List = Instance.new("ScrollingFrame")
+	Lib.List.Name = "LibList"
+	Lib.List.Size = UDim2.fromOffset(220, 250)
+	Lib.List.Position = UDim2.fromOffset(8, 38)
+	Lib.List.BackgroundColor3 = C.bg
+	Lib.List.BorderSizePixel = 0
+	Lib.List.ScrollBarThickness = 4
+	Lib.List.ScrollBarImageColor3 = C.border
+	Lib.List.CanvasSize = UDim2.new()
+	Lib.List.Parent = SavedPage
+	Instance.new("UICorner", Lib.List).CornerRadius = UDim.new(0, 0)
+	Metal.panel(Lib.List, "inset", 0.7)
+
+	local listLayout = Instance.new("UIListLayout")
+	listLayout.Padding = UDim.new(0, 4)
+	listLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	listLayout.Parent = Lib.List
+	listLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+		Lib.List.CanvasSize = UDim2.fromOffset(0, listLayout.AbsoluteContentSize.Y + 12)
+	end)
+
+	local listPad = Instance.new("UIPadding")
+	listPad.PaddingTop = UDim.new(0, 4)
+	listPad.PaddingBottom = UDim.new(0, 4)
+	listPad.PaddingLeft = UDim.new(0, 4)
+	listPad.PaddingRight = UDim.new(0, 4)
+	listPad.Parent = Lib.List
+
+	-- Info panel (right)
+	Lib.Info = Instance.new("Frame")
+	Lib.Info.Name = "LibInfo"
+	Lib.Info.Size = UDim2.fromOffset(210, 250)
+	Lib.Info.Position = UDim2.fromOffset(238, 38)
+	Lib.Info.BackgroundColor3 = C.bg
+	Lib.Info.BorderSizePixel = 0
+	Lib.Info.Parent = SavedPage
+	Instance.new("UICorner", Lib.Info).CornerRadius = UDim.new(0, 0)
+	Metal.panel(Lib.Info, "inset", 0.7)
+
+	Lib.InfoTitle = Instance.new("TextLabel")
+	Lib.InfoTitle.Name = "LibInfoTitle"
+	Lib.InfoTitle.Size = UDim2.new(1, -130, 0, 28)
+	Lib.InfoTitle.Position = UDim2.fromOffset(10, 4)
+	Lib.InfoTitle.BackgroundTransparency = 1
+	Lib.InfoTitle.Text = "Select a texture"
+	Lib.InfoTitle.TextColor3 = C.text
+	Lib.InfoTitle.Font = Enum.Font.Arcade
+	Lib.InfoTitle.TextSize = 13
+	Lib.InfoTitle.TextXAlignment = Enum.TextXAlignment.Left
+	Lib.InfoTitle.TextTruncate = Enum.TextTruncate.AtEnd
+	Lib.InfoTitle.Parent = Lib.Info
+	Metal.chrome(Lib.InfoTitle)
+
+	Lib.CopyBtn = Instance.new("TextButton")
+	Lib.CopyBtn.Name = "LibCopy"
+	Lib.CopyBtn.Size = UDim2.fromOffset(52, 26)
+	Lib.CopyBtn.Position = UDim2.new(1, -104, 0, 5)
+	Lib.CopyBtn.BackgroundColor3 = C.greenDark
+	Lib.CopyBtn.BorderSizePixel = 0
+	Lib.CopyBtn.AutoButtonColor = false
+	Lib.CopyBtn.Text = "COPY"
+	Lib.CopyBtn.TextColor3 = C.text
+	Lib.CopyBtn.Font = Enum.Font.Arcade
+	Lib.CopyBtn.TextSize = 10
+	Lib.CopyBtn.Parent = Lib.Info
+	Instance.new("UICorner", Lib.CopyBtn).CornerRadius = UDim.new(0, 0)
+	Metal.gloss(Lib.CopyBtn, 4)
+	Anim.button(Lib.CopyBtn)
+
+	Lib.DelBtn = Instance.new("TextButton")
+	Lib.DelBtn.Name = "LibDel"
+	Lib.DelBtn.Size = UDim2.fromOffset(40, 26)
+	Lib.DelBtn.Position = UDim2.new(1, -46, 0, 5)
+	Lib.DelBtn.BackgroundColor3 = C.redDark
+	Lib.DelBtn.BorderSizePixel = 0
+	Lib.DelBtn.AutoButtonColor = false
+	Lib.DelBtn.Text = "DEL"
+	Lib.DelBtn.TextColor3 = C.text
+	Lib.DelBtn.Font = Enum.Font.Arcade
+	Lib.DelBtn.TextSize = 10
+	Lib.DelBtn.Parent = Lib.Info
+	Metal.icon(Lib.DelBtn, Metal.ICON_DELETE, "DEL")
+	Metal.icon(Lib.CopyBtn, Metal.ICON_COPY, "COPY")
+	Instance.new("UICorner", Lib.DelBtn).CornerRadius = UDim.new(0, 0)
+	Metal.gloss(Lib.DelBtn, 4)
+	Anim.button(Lib.DelBtn)
+
+	Lib.InfoScroll = Instance.new("ScrollingFrame")
+	Lib.InfoScroll.Name = "LibInfoScroll"
+	Lib.InfoScroll.Size = UDim2.new(1, -12, 1, -38)
+	Lib.InfoScroll.Position = UDim2.fromOffset(6, 34)
+	Lib.InfoScroll.BackgroundTransparency = 1
+	Lib.InfoScroll.BorderSizePixel = 0
+	Lib.InfoScroll.ScrollBarThickness = 4
+	Lib.InfoScroll.ScrollBarImageColor3 = C.border
+	Lib.InfoScroll.CanvasSize = UDim2.new()
+	Lib.InfoScroll.Parent = Lib.Info
+
+	Lib.InfoLayout = Instance.new("UIListLayout")
+	Lib.InfoLayout.Padding = UDim.new(0, 4)
+	Lib.InfoLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	Lib.InfoLayout.Parent = Lib.InfoScroll
+	Lib.InfoLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+		Lib.InfoScroll.CanvasSize = UDim2.fromOffset(0, Lib.InfoLayout.AbsoluteContentSize.Y + 12)
+	end)
+end
+
+-- ===== MARKET PAGE (browse decals in the Creator Store and get their texture ids) =====
+do
+	local Mkt = Metal.Mkt
+	for k, v in pairs({
+	Items = {},
+	ItemById = {},
+	Selected = nil,
+	Rows = {},
+	Page = 0,
+	Keyword = "",
+	Loading = false,
+	HasMore = false,
+	Opened = false,
+	Status = "Type a word and press SEARCH.",
+	Token = 0,
+	Resolved = {},
+	Resolving = {},
+	MaxItems = 600,
+	PageSize = 30,
+	TexSetter = nil,
+	}) do
+		Mkt[k] = v
+	end
+
+	-- Search bar row
+	Mkt.SearchBar = Instance.new("Frame")
+	Mkt.SearchBar.Name = "MktSearchBar"
+	Mkt.SearchBar.Size = UDim2.fromOffset(444, 24)
+	Mkt.SearchBar.Position = UDim2.fromOffset(8, 0)
+	Mkt.SearchBar.BackgroundTransparency = 1
+	Mkt.SearchBar.ClipsDescendants = true
+	Mkt.SearchBar.Parent = Mkt.PageFrame
+
+	Mkt.Search = Instance.new("TextBox")
+	Mkt.Search.Name = "MktSearch"
+	Mkt.Search.Size = UDim2.fromOffset(370, 24)
+	Mkt.Search.Position = UDim2.fromOffset(0, 0)
+	Mkt.Search.BackgroundColor3 = C.input
+	Mkt.Search.BorderSizePixel = 0
+	Mkt.Search.PlaceholderText = "  Search decals (smoke, glow, star...)"
+	Mkt.Search.Text = ""
+	Mkt.Search.TextColor3 = C.text
+	Mkt.Search.PlaceholderColor3 = C.textMuted
+	Mkt.Search.Font = Enum.Font.Arcade
+	Mkt.Search.TextSize = 11
+	Mkt.Search.ClearTextOnFocus = false
+	Mkt.Search.Parent = Mkt.SearchBar
+	Instance.new("UICorner", Mkt.Search).CornerRadius = UDim.new(0, 0)
+
+	local searchPad = Instance.new("UIPadding")
+	searchPad.PaddingLeft = UDim.new(0, 4)
+	searchPad.Parent = Mkt.Search
+
+	local focusStroke = Instance.new("UIStroke")
+	focusStroke.Name = "FocusStroke"
+	focusStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	focusStroke.Color = C.accent
+	focusStroke.Thickness = 1.5
+	focusStroke.Transparency = 1
+	focusStroke.Parent = Mkt.Search
+	Mkt.Search.Focused:Connect(function()
+		Anim.tween(focusStroke, 0.2, { Transparency = 0.05 })
+	end)
+	Mkt.Search.FocusLost:Connect(function()
+		Anim.tween(focusStroke, 0.3, { Transparency = 1 })
+	end)
+
+	Mkt.SearchBtn = Instance.new("TextButton")
+	Mkt.SearchBtn.Name = "MktSearchBtn"
+	Mkt.SearchBtn.Size = UDim2.fromOffset(70, 24)
+	Mkt.SearchBtn.Position = UDim2.fromOffset(374, 0)
+	Mkt.SearchBtn.BackgroundColor3 = C.accent
+	Mkt.SearchBtn.BorderSizePixel = 0
+	Mkt.SearchBtn.AutoButtonColor = false
+	Mkt.SearchBtn.Text = "SEARCH"
+	Mkt.SearchBtn.TextColor3 = C.text
+	Mkt.SearchBtn.Font = Enum.Font.Arcade
+	Mkt.SearchBtn.TextSize = 10
+	Mkt.SearchBtn.Parent = Mkt.SearchBar
+	Metal.icon(Mkt.SearchBtn, Metal.ICON_SEARCH, "SEARCH")
+	Instance.new("UICorner", Mkt.SearchBtn).CornerRadius = UDim.new(0, 0)
+	Metal.gloss(Mkt.SearchBtn, 5)
+	Anim.button(Mkt.SearchBtn)
+
+	-- Decal list (left)
+	Mkt.List = Instance.new("ScrollingFrame")
+	Mkt.List.Name = "MktList"
+	Mkt.List.Size = UDim2.fromOffset(220, 250)
+	Mkt.List.Position = UDim2.fromOffset(8, 38)
+	Mkt.List.BackgroundColor3 = C.bg
+	Mkt.List.BorderSizePixel = 0
+	Mkt.List.ScrollBarThickness = 4
+	Mkt.List.ScrollBarImageColor3 = C.border
+	Mkt.List.CanvasSize = UDim2.new()
+	Mkt.List.Parent = Mkt.PageFrame
+	Instance.new("UICorner", Mkt.List).CornerRadius = UDim.new(0, 0)
+	Metal.panel(Mkt.List, "inset", 0.7)
+
+	local listLayout = Instance.new("UIListLayout")
+	listLayout.Padding = UDim.new(0, 4)
+	listLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	listLayout.Parent = Mkt.List
+	listLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+		Mkt.List.CanvasSize = UDim2.fromOffset(0, listLayout.AbsoluteContentSize.Y + 12)
+	end)
+
+	local listPad = Instance.new("UIPadding")
+	listPad.PaddingTop = UDim.new(0, 4)
+	listPad.PaddingBottom = UDim.new(0, 4)
+	listPad.PaddingLeft = UDim.new(0, 4)
+	listPad.PaddingRight = UDim.new(0, 4)
+	listPad.Parent = Mkt.List
+
+	-- Info panel (right)
+	Mkt.Info = Instance.new("Frame")
+	Mkt.Info.Name = "MktInfo"
+	Mkt.Info.Size = UDim2.fromOffset(210, 250)
+	Mkt.Info.Position = UDim2.fromOffset(238, 38)
+	Mkt.Info.BackgroundColor3 = C.bg
+	Mkt.Info.BorderSizePixel = 0
+	Mkt.Info.Parent = Mkt.PageFrame
+	Instance.new("UICorner", Mkt.Info).CornerRadius = UDim.new(0, 0)
+	Metal.panel(Mkt.Info, "inset", 0.7)
+
+	Mkt.InfoTitle = Instance.new("TextLabel")
+	Mkt.InfoTitle.Name = "MktInfoTitle"
+	Mkt.InfoTitle.Size = UDim2.new(1, -130, 0, 28)
+	Mkt.InfoTitle.Position = UDim2.fromOffset(10, 4)
+	Mkt.InfoTitle.BackgroundTransparency = 1
+	Mkt.InfoTitle.Text = "Select a decal"
+	Mkt.InfoTitle.TextColor3 = C.text
+	Mkt.InfoTitle.Font = Enum.Font.Arcade
+	Mkt.InfoTitle.TextSize = 13
+	Mkt.InfoTitle.TextXAlignment = Enum.TextXAlignment.Left
+	Mkt.InfoTitle.TextTruncate = Enum.TextTruncate.AtEnd
+	Mkt.InfoTitle.Parent = Mkt.Info
+	Metal.chrome(Mkt.InfoTitle)
+
+	Mkt.CopyBtn = Instance.new("TextButton")
+	Mkt.CopyBtn.Name = "MktCopy"
+	Mkt.CopyBtn.Size = UDim2.fromOffset(52, 26)
+	Mkt.CopyBtn.Position = UDim2.new(1, -108, 0, 5)
+	Mkt.CopyBtn.BackgroundColor3 = C.greenDark
+	Mkt.CopyBtn.BorderSizePixel = 0
+	Mkt.CopyBtn.AutoButtonColor = false
+	Mkt.CopyBtn.Text = "COPY"
+	Mkt.CopyBtn.TextColor3 = C.text
+	Mkt.CopyBtn.Font = Enum.Font.Arcade
+	Mkt.CopyBtn.TextSize = 10
+	Mkt.CopyBtn.Parent = Mkt.Info
+	Instance.new("UICorner", Mkt.CopyBtn).CornerRadius = UDim.new(0, 0)
+	Metal.gloss(Mkt.CopyBtn, 4)
+	Anim.button(Mkt.CopyBtn)
+
+	Mkt.SaveBtn = Instance.new("TextButton")
+	Mkt.SaveBtn.Name = "MktSave"
+	Mkt.SaveBtn.Size = UDim2.fromOffset(48, 26)
+	Mkt.SaveBtn.Position = UDim2.new(1, -54, 0, 5)
+	Mkt.SaveBtn.BackgroundColor3 = C.accent
+	Mkt.SaveBtn.BorderSizePixel = 0
+	Mkt.SaveBtn.AutoButtonColor = false
+	Mkt.SaveBtn.Text = "SAVE"
+	Mkt.SaveBtn.TextColor3 = C.text
+	Mkt.SaveBtn.Font = Enum.Font.Arcade
+	Mkt.SaveBtn.TextSize = 10
+	Mkt.SaveBtn.Parent = Mkt.Info
+	Metal.icon(Mkt.SaveBtn, Metal.ICON_SAVE, "SAVE")
+	Metal.icon(Mkt.CopyBtn, Metal.ICON_COPY, "COPY")
+	Instance.new("UICorner", Mkt.SaveBtn).CornerRadius = UDim.new(0, 0)
+	Metal.gloss(Mkt.SaveBtn, 4)
+	Anim.button(Mkt.SaveBtn)
+
+	Mkt.InfoScroll = Instance.new("ScrollingFrame")
+	Mkt.InfoScroll.Name = "MktInfoScroll"
+	Mkt.InfoScroll.Size = UDim2.new(1, -12, 1, -38)
+	Mkt.InfoScroll.Position = UDim2.fromOffset(6, 34)
+	Mkt.InfoScroll.BackgroundTransparency = 1
+	Mkt.InfoScroll.BorderSizePixel = 0
+	Mkt.InfoScroll.ScrollBarThickness = 4
+	Mkt.InfoScroll.ScrollBarImageColor3 = C.border
+	Mkt.InfoScroll.CanvasSize = UDim2.new()
+	Mkt.InfoScroll.Parent = Mkt.Info
+
+	Mkt.InfoLayout = Instance.new("UIListLayout")
+	Mkt.InfoLayout.Padding = UDim.new(0, 4)
+	Mkt.InfoLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	Mkt.InfoLayout.Parent = Mkt.InfoScroll
+	Mkt.InfoLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+		Mkt.InfoScroll.CanvasSize = UDim2.fromOffset(0, Mkt.InfoLayout.AbsoluteContentSize.Y + 12)
+	end)
+end
+
+-- ===================== DATA MODEL =====================
+
+local ParticleMap = {}
+local ParticleList = {}
+local AutoScannedList = {}
+local AutoScannedSet = {}
+local AutoScannedCount = 0
+
+local MAX_PARTICLES = 100000
+local MAX_AUTO_CAPTURES = 8000
+local MAX_AUTO_QUEUE = 2500
+
+local Filtered = {}
+-- ===================== FLIPBOOK PLAYER =====================
+-- Plays flipbook (sprite sheet) textures inside the preview boxes.
+-- The grid is found from the particle's actual flipbook settings or a grid picked by hand.
+-- No automatic image/pixel grid detection is used. If no grid is available, the texture stays still
+-- until a grid is selected manually from the preview corner label.
+do
+	local LAYOUT_BY_NUM = { [0] = "None", "Grid2x2", "Grid4x4", "Grid8x8", "Custom" }
+	local MODE_BY_NUM = { [0] = "Loop", "OneShot", "PingPong", "Random" }
+
+	Flip.Active = {}
+	Flip.Manual = {}    -- texture id -> grid picked by hand this session
+	Flip.Animate = false -- global: play flipbook animation in preview containers (off by default)
+	Flip.Presets = {
+		{ 1, 1 }, { 2, 2 }, { 3, 3 }, { 4, 4 }, { 5, 5 }, { 6, 6 }, { 7, 7 }, { 8, 8 },
+		{ 16, 16 }, { 4, 2 }, { 2, 4 }, { 8, 4 }, { 4, 8 }, { 4, 1 }, { 1, 4 }, { 8, 1 }, { 1, 8 },
+	}
+
+	-- Toggle flipbook animation globally. Off = show the raw full texture;
+	-- On = crop to the grid and play frames.
+	function Flip.setAnimate(on)
+		Flip.Animate = on == true
+		local now = os.clock()
+		for i = #Flip.Active, 1, -1 do
+			local ctl = Flip.Active[i]
+			if not ctl.alive or not ctl.preview or not ctl.preview.Parent then
+				ctl.alive = false
+				table.remove(Flip.Active, i)
+			else
+				ctl.t0 = now
+				ctl.frame = -1
+				if ctl.refreshVisual then
+					pcall(ctl.refreshVisual)
+				else
+					pcall(ctl.step, now)
+				end
+			end
+		end
+	end
+
+	local function enumName(v, map)
+		if typeof(v) == "EnumItem" then return v.Name end
+		if type(v) == "string" then return v:match("([^%.]+)$") or v end
+		if type(v) == "table" and v.Name then return tostring(v.Name) end
+		if type(v) == "number" and map then return map[v] end
+		return nil
+	end
+
+	-- Reads the real flipbook settings of a particle (instance or saved table).
+	-- Reads only the flipbook grid dimensions. Preview timing is not part of saved grid data.
+	function Flip.fromParticle(o)
+		if o == nil then return nil end
+		local layoutV, sxV, syV
+		if type(o) == "table" then
+			local p = o.Properties
+			if type(p) ~= "table" then return nil end
+			layoutV = deserialize(p.FlipbookLayout)
+			sxV = deserialize(p.FlipbookSizeX)
+			syV = deserialize(p.FlipbookSizeY)
+		else
+			local function get(n)
+				local ok, v = pcall(function() return o[n] end)
+				if ok then return v end
+				return nil
+			end
+			layoutV = get("FlipbookLayout")
+			sxV = get("FlipbookSizeX")
+			syV = get("FlipbookSizeY")
+		end
+		local layout = enumName(layoutV, LAYOUT_BY_NUM)
+		local c, r
+		if layout == "Grid2x2" then
+			c, r = 2, 2
+		elseif layout == "Grid4x4" then
+			c, r = 4, 4
+		elseif layout == "Grid8x8" then
+			c, r = 8, 8
+		elseif layout == "Custom" then
+			c = math.floor(tonumber(sxV) or 1)
+			r = math.floor(tonumber(syV) or 1)
+		else
+			return nil
+		end
+		c = math.clamp(c, 1, 64)
+		r = math.clamp(r, 1, 64)
+		if c * r <= 1 then return nil end
+		return { C = c, R = r }
+	end
+
+	function Flip.safeGrid(o)
+		local ok, g = pcall(Flip.fromParticle, o)
+		if ok then return g end
+		return nil
+	end
+
+	-- Which frame to show at a given time.
+	-- Preview playback uses a fixed 30 FPS and does not read particle framerate or lifetime.
+	function Flip.frameAt(total, mode, fps, t, life)
+		if total <= 1 then return 0 end
+		if mode == "OneShot" then
+			local dur = tonumber(life) or 1
+			if dur <= 0 or dur ~= dur then dur = 1 end
+			-- Hold the final frame for a short beat so the full sequence is readable
+			local hold = math.max(0.25, dur * 0.15)
+			local cycle = dur + hold
+			local localT = t % cycle
+			if localT >= dur then
+				return total - 1
+			end
+			local progress = localT / dur
+			return math.min(math.floor(progress * total), total - 1)
+		end
+		if not fps or fps <= 0 then return 0 end
+		local step = math.floor(t * fps)
+		if mode == "PingPong" then
+			local period = total * 2 - 2
+			if period <= 0 then return 0 end
+			local s = step % period
+			if s < total then return s end
+			return period - s
+		elseif mode == "Random" then
+			return math.floor(math.abs(math.sin(step * 12.9898) * 43758.5453)) % total
+		end
+		-- Loop (default)
+		return step % total
+	end
+
+
+	-- ---------- the player ----------
+	function Flip.ensureLoop()
+		if Flip.Conn then return end
+		Flip.Conn = RunService.Heartbeat:Connect(function()
+			local now = os.clock()
+			for i = #Flip.Active, 1, -1 do
+				local ctl = Flip.Active[i]
+				if (not ctl.alive) or (not ctl.preview.Parent) or (not ctl.holder.Parent) then
+					ctl.alive = false
+					table.remove(Flip.Active, i)
+				else
+					pcall(ctl.step, now)
+				end
+			end
+		end)
+	end
+
+	-- Puts a playing flipbook picture inside `preview` (a Frame).
+	-- opts.grid      known grid { C, R, M, F } (optional)
+	-- opts.getGrid   function returning the known grid (optional, used instead of opts.grid)
+	-- opts.srcName   label for a known grid (default "LIVE")
+	-- opts.static    true = show the whole picture, do not look for a grid
+	-- opts.noDetect  true = do not run auto detection
+	-- Manual grid cycling is session-only (never written to disk).
+	function Flip.mount(preview, texId, opts)
+		opts = opts or {}
+		local ctl = {
+			alive = true, preview = preview, tex = texId,
+			c = 1, r = 1, mode = "Loop", fps = 30, life = 1, src = "...",
+			frame = -1, t0 = os.clock(), presetIdx = 0, noDetect = opts.noDetect == true,
+			showingGrid = false,
+		}
+
+		local holder = Instance.new("Frame")
+		holder.Name = "FlipHolder"
+		holder.AnchorPoint = Vector2.new(0.5, 0.5)
+		holder.Position = UDim2.new(0.5, 0, 0.5, 0)
+		holder.Size = UDim2.new(1, -10, 1, -10)
+		holder.BackgroundTransparency = 1
+		holder.BorderSizePixel = 0
+		holder.ClipsDescendants = true
+		holder.Parent = preview
+		ctl.holder = holder
+
+		local aspect = Instance.new("UIAspectRatioConstraint")
+		aspect.AspectRatio = 1
+		aspect.Parent = holder
+
+		local image = Instance.new("ImageLabel")
+		image.Name = "FlipImage"
+		image.BackgroundTransparency = 1
+		image.BorderSizePixel = 0
+		image.Size = UDim2.fromScale(1, 1)
+		image.Position = UDim2.fromScale(0, 0)
+		image.Image = texId
+		image.ScaleType = Enum.ScaleType.Fit
+		image.Parent = holder
+		ctl.image = image
+
+		local btn = Instance.new("TextButton")
+		btn.Name = "FlipGridButton"
+		btn.AnchorPoint = Vector2.new(1, 1)
+		btn.Position = UDim2.new(1, -3, 1, -3)
+		btn.Size = UDim2.fromOffset(0, 16)
+		btn.AutomaticSize = Enum.AutomaticSize.X
+		btn.BackgroundColor3 = Color3.fromRGB(16, 16, 22)
+		btn.BackgroundTransparency = 0.25
+		btn.BorderSizePixel = 0
+		btn.AutoButtonColor = false
+		btn.Font = Enum.Font.Arcade
+		btn.TextSize = 9
+		btn.TextColor3 = C.accent
+		btn.Text = "..."
+		btn.ZIndex = 6
+		btn.Parent = preview
+		local pad = Instance.new("UIPadding")
+		pad.PaddingLeft = UDim.new(0, 4)
+		pad.PaddingRight = UDim.new(0, 4)
+		pad.Parent = btn
+		ctl.button = btn
+
+		local function label()
+			local total = ctl.c * ctl.r
+			if not Flip.Animate then
+				-- Animation off: always show the raw full sheet
+				if total > 1 then
+					btn.Text = string.format("%dx%d %s RAW", ctl.c, ctl.r, ctl.src or "")
+				else
+					btn.Text = "RAW " .. (ctl.src or "")
+				end
+				return
+			end
+			if total > 1 then
+				btn.Text = string.format("%dx%d %s  %d/%d", ctl.c, ctl.r, ctl.src, math.max(ctl.frame, 0) + 1, total)
+			else
+				btn.Text = "1x1 " .. ctl.src
+			end
+		end
+
+		-- Show the whole texture, not cropped to a single flipbook cell.
+		local function showRaw()
+			image.ScaleType = Enum.ScaleType.Fit
+			image.Size = UDim2.fromScale(1, 1)
+			image.Position = UDim2.fromScale(0, 0)
+			local ratio = 1
+			if ctl.imgW and ctl.imgH and ctl.imgW > 0 and ctl.imgH > 0 then
+				ratio = math.clamp(ctl.imgW / ctl.imgH, 0.1, 10)
+			end
+			aspect.AspectRatio = ratio
+			ctl.frame = -1
+			ctl.showingGrid = false
+			label()
+		end
+
+		-- Crop the image to the stored grid so individual frames can be shown.
+		local function showGridLayout()
+			local c, r = ctl.c, ctl.r
+			if c * r <= 1 then
+				showRaw()
+				return
+			end
+			local ratio = r / c
+			if ctl.imgW and ctl.imgH and ctl.imgW > 0 and ctl.imgH > 0 then
+				ratio = (ctl.imgW / c) / (ctl.imgH / r)
+			end
+			image.ScaleType = Enum.ScaleType.Stretch
+			image.Size = UDim2.fromScale(c, r)
+			image.Position = UDim2.fromScale(0, 0)
+			aspect.AspectRatio = math.clamp(ratio, 0.1, 10)
+			ctl.showingGrid = true
+		end
+
+		function ctl.refreshVisual()
+			if not Flip.Animate then
+				showRaw()
+			else
+				showGridLayout()
+				ctl.frame = -1
+				ctl.t0 = os.clock()
+				-- step will paint the current frame
+				pcall(ctl.step, os.clock())
+			end
+		end
+
+		local function apply(c, r, mode, fps, src, life)
+			ctl.c, ctl.r = c, r
+			ctl.mode = mode or "Loop"
+			ctl.fps = tonumber(fps) or 30
+			-- OneShot ignores FPS; frames are spread across particle Lifetime
+			local L = tonumber(life)
+			if not L or L ~= L or L <= 0 then L = 1 end
+			ctl.life = L
+			ctl.src = src
+			ctl.frame = -1
+			ctl.t0 = os.clock()
+			-- Until animation is toggled on, keep showing the raw full texture
+			if not Flip.Animate then
+				showRaw()
+			else
+				showGridLayout()
+				label()
+			end
+		end
+
+		local function known()
+			local g = nil
+			if opts.getGrid then
+				local ok, v = pcall(opts.getGrid)
+				if ok then g = v end
+			else
+				g = opts.grid
+			end
+			if type(g) == "table" and tonumber(g.C) and tonumber(g.R) then return g end
+			return nil
+		end
+
+		-- picks the best grid by the priority list at the top
+		local function resolve()
+			local id = ctl.tex
+			local g = known()
+			if g and g.Manual then
+				apply(g.C, g.R, "Loop", 30, "MANUAL", 1)
+				return
+			end
+			local man = Flip.Manual[id]
+			if man then
+				apply(man.C, man.R, "Loop", 30, "MANUAL", 1)
+				return
+			end
+			if g then
+				apply(g.C, g.R, "Loop", 30, opts.srcName or "LIVE", 1)
+				return
+			end
+			if opts.static then
+				apply(1, 1, "Loop", 30, "STATIC", 1)
+				return
+			end
+			-- Automatic image-based grid detection is intentionally disabled.
+			-- Use the real particle settings above, or choose a grid manually with the corner button.
+			apply(1, 1, "Loop", 30, "MANUAL", 1)
+		end
+
+		function ctl.step(now)
+			-- Animation off: keep the raw full texture on screen, never crop to a cell
+			if not Flip.Animate then
+				if ctl.showingGrid then
+					showRaw()
+				end
+				return
+			end
+			local total = ctl.c * ctl.r
+			if total <= 1 then return end
+			if not ctl.showingGrid then
+				showGridLayout()
+			end
+			-- Preview timing is fixed; only the selected grid dimensions vary.
+			local idx = Flip.frameAt(total, ctl.mode, ctl.fps, now - ctl.t0, ctl.life)
+			if idx ~= ctl.frame then
+				ctl.frame = idx
+				local col = idx % ctl.c
+				local row = math.floor(idx / ctl.c)
+				image.Position = UDim2.fromScale(-col, -row)
+				label()
+			end
+		end
+
+		-- swap the picture (used by the market once the real texture id is known)
+		function ctl.setTexture(newId)
+			if not newId or newId == ctl.tex then return end
+			ctl.tex = newId
+			ctl.noDetect = true
+			ctl.imgW, ctl.imgH = nil, nil
+			image.Image = newId
+			ctl.presetIdx = 0
+			resolve()
+		end
+
+		-- Cycling the grid is preview-only for this session — never written to disk.
+		btn.MouseButton1Click:Connect(function()
+			ctl.presetIdx = (ctl.presetIdx + 1) % (#Flip.Presets + 1)
+			local id = ctl.tex
+			if ctl.presetIdx == 0 then
+				Flip.Manual[id] = nil
+				resolve()
+			else
+				local p = Flip.Presets[ctl.presetIdx]
+				local g = known()
+				local man = {
+					C = p[1],
+					R = p[2],
+					M = (g and g.M) or "Loop",
+					F = (g and g.F) or 30,
+					L = (g and g.L) or 1,
+				}
+				Flip.Manual[id] = man
+				apply(man.C, man.R, "Loop", 30, "MANUAL", 1)
+			end
+		end)
+
+		table.insert(Flip.Active, ctl)
+		Flip.ensureLoop()
+		resolve()
+		return ctl
+	end
+end
+
+local Rows = {}
+local RowData = {}
+local RowTweens = {}
+local RowTarget = {}
+local Selected = nil
+
+local RowHeight = 40
+local uiScale = 1
+local Overscan = 3
+local LastFirst = -1
+local LastLast = -1
+local ScanBusy = false
+local FilterBusy = false
+local AutoScanning = false
+
+local MIN_W = 380
+local MIN_H = 280
+local MAX_W = 1000
+local MAX_H = 800
+
+local currentW = 460
+local currentH = 340
+local minimized = false
+local currentPage = 1
+
+-- Animation state shared between functions
+local AnimateRender = false   -- true only while a page is being opened (rows pop in)
+local pageTopValue = 46       -- where pages sit under the tab bar (always set by layoutParticlePage)
+local InfoAnimOn = false      -- true while the info panel is filling in
+local InfoAnimIndex = 0
+
+-- The visible height of the particle list, stored by the layout function.
+local ListViewH = 250
+
+-- Remembers running page slide animations so the layout can cancel them
+local PageTweens = {}
+
+-- Info-only mode (hides the whole browser, keeps only the info panel)
+local infoOnly = false
+local InfoMode = {
+	w = 300, h = 340,                 -- window size while in info-only mode
+	minW = 220, minH = 200,           -- smallest window in info-only mode
+	refW = 300, refH = 340,           -- size at which the UI is drawn at 100%
+	normalMinW = 380, normalMinH = 280,
+	normalW = 460, normalH = 340,     -- remembered normal window size
+	prevPage = 1,                     -- page that was open before info-only
+}
+
+local PreviewPart = nil
+local PreviewEmitter = nil
+local Previewing = false
+
+local setPage
+local renderFavPage
+local updateFavButton
+local layoutParticlePage
+local applyMainSize
+local ResizeHandle
+local rebuildFilter
+
+local function isValidParticle(o)
+	if not o then return false end
+	if type(o) == "table" then
+		return o.Name ~= nil or o.Properties ~= nil
+	end
+	local ok, isEmitter = pcall(function()
+		return o:IsA("ParticleEmitter")
+	end)
+	return ok and isEmitter and o.Parent ~= nil
+end
+
+local function stopPreview()
+	Previewing = false
+	if PreviewPart then
+		PreviewPart:Destroy()
+		PreviewPart = nil
+	end
+	PreviewEmitter = nil
+	PreviewButton.Text = "PREVIEW"
+	setBg(PreviewButton, C.accent)
+end
+
+local function applyPropertiesToEmitter(emitter, sourceProps, isLive)
+	local applied = {}
+
+	local function setProp(name, value)
+		if value == nil then return end
+		local ok = pcall(function()
+			emitter[name] = value
+		end)
+		if ok then
+			applied[name] = true
+		end
+	end
+
+	if isLive then
+		local src = sourceProps
+		pcall(function() emitter.Texture = src.Texture end)
+		applied.Texture = true
+		pcall(function() emitter.FlipbookLayout = src.FlipbookLayout end)
+		applied.FlipbookLayout = true
+		pcall(function() emitter.FlipbookSizeX = src.FlipbookSizeX end)
+		pcall(function() emitter.FlipbookSizeY = src.FlipbookSizeY end)
+		applied.FlipbookSizeX = true
+		applied.FlipbookSizeY = true
+		pcall(function() emitter.FlipbookBlendFrames = src.FlipbookBlendFrames end)
+		pcall(function() emitter.FlipbookMode = src.FlipbookMode end)
+		pcall(function() emitter.FlipbookFramerate = src.FlipbookFramerate end)
+		pcall(function() emitter.FlipbookStartRandom = src.FlipbookStartRandom end)
+		applied.FlipbookBlendFrames = true
+		applied.FlipbookMode = true
+		applied.FlipbookFramerate = true
+		applied.FlipbookStartRandom = true
+		for _, prop in ipairs(particleProperties) do
+			if not applied[prop] then
+				pcall(function()
+					emitter[prop] = src[prop]
+				end)
+			end
+		end
+	else
+		local props = sourceProps
+		local function getDeserialized(name)
+			local raw = props[name]
+			if raw == nil then return nil end
+			return deserialize(raw)
+		end
+		setProp("Texture", getDeserialized("Texture"))
+		setProp("FlipbookLayout", getDeserialized("FlipbookLayout"))
+		local sx = getDeserialized("FlipbookSizeX")
+		local sy = getDeserialized("FlipbookSizeY")
+		if sx ~= nil then
+			setProp("FlipbookSizeX", math.clamp(math.floor(tonumber(sx) or 1), 1, 64))
+		end
+		if sy ~= nil then
+			setProp("FlipbookSizeY", math.clamp(math.floor(tonumber(sy) or 1), 1, 64))
+		end
+		setProp("FlipbookBlendFrames", getDeserialized("FlipbookBlendFrames"))
+		setProp("FlipbookMode", getDeserialized("FlipbookMode"))
+		setProp("FlipbookFramerate", getDeserialized("FlipbookFramerate"))
+		setProp("FlipbookStartRandom", getDeserialized("FlipbookStartRandom"))
+		for prop, val in pairs(props) do
+			if not applied[prop] then
+				setProp(prop, deserialize(val))
+			end
+		end
+	end
+
+	emitter.Enabled = true
+end
+
+local function startPreview(target)
+	stopPreview()
+	if not target then return end
+
+	local spawnCFrame
+	if LP and LP.Character and LP.Character:FindFirstChild("HumanoidRootPart") then
+		local hrp = LP.Character.HumanoidRootPart
+		spawnCFrame = hrp.CFrame * CFrame.new(0, 0, -7)
+	elseif workspace.CurrentCamera then
+		spawnCFrame = workspace.CurrentCamera.CFrame * CFrame.new(0, 0, -7)
+	else
+		return
+	end
+
+	PreviewPart = Instance.new("Part")
+	PreviewPart.Name = "ParticlePreviewPart"
+	PreviewPart.Size = Vector3.new(0.5, 0.5, 0.5)
+	PreviewPart.Transparency = 1
+	PreviewPart.CanCollide = false
+	PreviewPart.Anchored = true
+	PreviewPart.CFrame = spawnCFrame
+	PreviewPart.Parent = workspace
+
+	PreviewEmitter = Instance.new("ParticleEmitter")
+
+	if type(target) ~= "table" and typeof(target) == "Instance" and target:IsA("ParticleEmitter") then
+		applyPropertiesToEmitter(PreviewEmitter, target, true)
+	elseif type(target) == "table" and target.Properties then
+		applyPropertiesToEmitter(PreviewEmitter, target.Properties, false)
+	else
+		PreviewPart:Destroy()
+		PreviewPart = nil
+		return
+	end
+
+	PreviewEmitter.Parent = PreviewPart
+
+	local emitCount = getEmitCount(target)
+	emitCount = math.clamp(math.floor(tonumber(emitCount) or 1), 1, 10000)
+	pcall(function()
+		PreviewEmitter.Enabled = true
+		PreviewEmitter:Emit(emitCount)
+	end)
+
+	Previewing = true
+	PreviewButton.Text = "STOP"
+	setBg(PreviewButton, C.red)
+end
+
+PreviewButton.MouseButton1Click:Connect(function()
+	if Previewing then
+		stopPreview()
+	else
+		if Selected then
+			startPreview(Selected)
+		end
+	end
+end)
+
+updateFavButton = function()
+	local tc, bg = C.textDim, C.surface3
+	if Selected and isFavourited(Selected) then
+		tc, bg = C.heart, C.heartBg
+	end
+	FavButton.Text = "♥"
+	Anim.tween(FavButton, 0.2, { TextColor3 = tc, BackgroundColor3 = bg })
+end
+
+FavButton.MouseButton1Click:Connect(function()
+	if not Selected then return end
+	local ok = toggleFavourite(Selected)
+	if ok then
+		updateFavButton()
+		if FavPage.Visible then
+			renderFavPage()
+		end
+	end
+end)
+
+local function clearInfo()
+	for _, v in ipairs(InfoScroll:GetChildren()) do
+		if v ~= InfoLayout then
+			v:Destroy()
+		end
+	end
+end
+
+local function measureTextHeight(text, textSize, font, maxWidth)
+	local ok, size = pcall(function()
+		return TextService:GetTextSize(
+			tostring(text),
+			textSize,
+			font,
+			Vector2.new(math.max(maxWidth, 20), 10000)
+		)
+	end)
+	if ok and size then
+		return math.max(size.Y, textSize + 2)
+	end
+	local charsPerLine = math.max(1, math.floor(maxWidth / (textSize * 0.45)))
+	local lines = math.ceil(#tostring(text) / charsPerLine)
+	return math.max(lines * (textSize + 2), textSize + 2)
+end
+
+local function copyToClipboard(text)
+	text = tostring(text or "")
+	if text == "" then return false end
+	if type(setclipboard) == "function" then
+		local ok = pcall(setclipboard, text)
+		if ok then return true end
+	end
+	if type(toclipboard) == "function" then
+		local ok = pcall(toclipboard, text)
+		if ok then return true end
+	end
+	if type(Clipboard) == "table" and type(Clipboard.set) == "function" then
+		local ok = pcall(Clipboard.set, text)
+		if ok then return true end
+	end
+	return false
+end
+
+local PRECISION_ICON = "rbxassetid://13321848320"
+
+local function infoLine(name, value, opts)
+	opts = opts or {}
+	local valueStr = tostring(value)
+	local preciseStr = opts.preciseValue and tostring(opts.preciseValue) or nil
+	local copyText = opts.copyText
+	local canCopy = type(copyText) == "string" and copyText ~= "" and copyText ~= "None"
+	local canToggle = preciseStr ~= nil and preciseStr ~= valueStr
+
+	local s = uiScale
+	local textSz = math.max(9, math.floor(11 * s + 0.5))
+	local labelW = math.max(58, math.floor(78 * s + 0.5))
+	local rightPad = canToggle and math.max(20, math.floor(26 * s)) or 4
+	local gap = math.max(4, math.floor(8 * s + 0.5))
+	local infoAbsW = InfoScroll.AbsoluteSize.X
+	if infoAbsW < 40 then infoAbsW = math.max(120, currentW * 0.4) end
+	local valueWidth = math.max(50, infoAbsW - labelW - gap - rightPad - 8)
+
+	local function heightFor(text)
+		local h = measureTextHeight(text, textSz, Enum.Font.Arcade, valueWidth)
+		return math.max(math.floor(24 * s), math.ceil(h) + math.floor(12 * s))
+	end
+
+	local normalH = heightFor(valueStr)
+	local preciseH = canToggle and heightFor(preciseStr) or normalH
+	local rowH = normalH
+
+	local row
+	if canCopy then
+		row = Instance.new("TextButton")
+		row.AutoButtonColor = false
+		row.Text = ""
+		row.Active = true
+	else
+		row = Instance.new("Frame")
+	end
+	row.Size = UDim2.new(1, -2, 0, rowH)
+	row.BackgroundColor3 = C.surface2
+	row.BorderSizePixel = 0
+	row.ClipsDescendants = true
+	row.Parent = InfoScroll
+	Instance.new("UICorner", row).CornerRadius = UDim.new(0, 0)
+	Metal.panel(row, "raised", 0.35)
+
+	local left = Instance.new("TextLabel")
+	left.Size = UDim2.fromOffset(labelW, rowH)
+	left.Position = UDim2.fromOffset(6, 0)
+	left.BackgroundTransparency = 1
+	left.Text = name
+	left.TextColor3 = C.textMuted
+	left.Font = Enum.Font.Arcade
+	left.TextSize = textSz
+	left.TextXAlignment = Enum.TextXAlignment.Left
+	left.TextYAlignment = Enum.TextYAlignment.Top
+	left.TextTruncate = Enum.TextTruncate.AtEnd
+	left.Parent = row
+
+	local right = Instance.new("TextLabel")
+	right.Size = UDim2.new(1, -(labelW + gap + rightPad), 1, -8)
+	right.Position = UDim2.fromOffset(labelW + gap, 4)
+	right.BackgroundTransparency = 1
+	right.Text = valueStr
+	right.TextColor3 = canCopy and C.accent or C.text
+	right.Font = Enum.Font.Arcade
+	right.TextSize = textSz
+	right.TextWrapped = true
+	right.TextTruncate = Enum.TextTruncate.None
+	right.TextXAlignment = Enum.TextXAlignment.Left
+	right.TextYAlignment = Enum.TextYAlignment.Top
+	right.Parent = row
+
+	local function applyRowHeight(h)
+		Anim.tween(row, 0.18, { Size = UDim2.new(1, -2, 0, h) })
+		Anim.tween(left, 0.18, { Size = UDim2.fromOffset(labelW, h) })
+	end
+
+	if canToggle then
+		local toggle = Instance.new("ImageButton")
+		toggle.Name = "PrecisionToggle"
+		toggle.Size = UDim2.fromOffset(20, 20)
+		toggle.Position = UDim2.new(1, -22, 0, 4)
+		toggle.BackgroundColor3 = C.surface3
+		toggle.BorderSizePixel = 0
+		toggle.Image = PRECISION_ICON
+		toggle.ScaleType = Enum.ScaleType.Fit
+		toggle.AutoButtonColor = true
+		toggle.ZIndex = 2
+		toggle.Parent = row
+		Instance.new("UICorner", toggle).CornerRadius = UDim.new(0, 0)
+		Anim.button(toggle)
+
+		local showingPrecise = false
+		toggle.MouseButton1Click:Connect(function()
+			showingPrecise = not showingPrecise
+			if showingPrecise then
+				right.Text = preciseStr
+				applyRowHeight(preciseH)
+				setBg(toggle, C.accentSoft)
+			else
+				right.Text = valueStr
+				applyRowHeight(normalH)
+				setBg(toggle, C.surface3)
+			end
+		end)
+	end
+
+	if canCopy then
+		row.MouseButton1Click:Connect(function()
+			local ok = copyToClipboard(copyText)
+			local prev = right.Text
+			local prevColor = right.TextColor3
+			if ok then
+				right.Text = "Copied!"
+				right.TextColor3 = C.green
+			else
+				right.Text = "Copy failed"
+				right.TextColor3 = C.red
+			end
+			task.delay(0.9, function()
+				if right and right.Parent then
+					right.Text = prev
+					right.TextColor3 = prevColor
+				end
+			end)
+		end)
+		row.MouseEnter:Connect(function()
+			Anim.tween(row, 0.12, { BackgroundColor3 = C.rowHover })
+		end)
+		row.MouseLeave:Connect(function()
+			Anim.tween(row, 0.18, { BackgroundColor3 = C.surface2 })
+		end)
+	end
+
+	-- cascade in when a particle is selected
+	if InfoAnimOn then
+		InfoAnimIndex += 1
+		Anim.fadeIn(row, math.min(InfoAnimIndex, 16) * 0.025, 0.25)
+	end
+end
+
+local function showInfo(o, keepPreview, noAnim)
+	if not isValidParticle(o) then return end
+	Selected = o
+	if Previewing and not keepPreview then stopPreview() end
+
+	InfoTitle.Text = (type(o) == "table" and o.Name) or o.Name or "Particle"
+	if not noAnim then
+		InfoTitle.TextTransparency = 1
+		Anim.tween(InfoTitle, 0.3, { TextTransparency = 0 })
+	end
+	clearInfo()
+	updateFavButton()
+
+	InfoAnimOn = not noAnim
+	InfoAnimIndex = 0
+
+	local texture = getTexture(o)
+	local preview = Instance.new("Frame")
+	preview.Size = UDim2.new(1, -2, 0, 96)
+	preview.BackgroundColor3 = Color3.fromRGB(10, 10, 14)
+	preview.BorderSizePixel = 0
+	preview.Parent = InfoScroll
+	Instance.new("UICorner", preview).CornerRadius = UDim.new(0, 0)
+
+	if texture ~= "" then
+		local liveGrid = Flip.safeGrid(o)
+		Flip.mount(preview, texture, {
+			grid = liveGrid,
+			srcName = "LIVE",
+			static = (liveGrid == nil),
+		})
+	else
+		local txt = Instance.new("TextLabel")
+		txt.Size = UDim2.fromScale(1, 1)
+		txt.BackgroundTransparency = 1
+		txt.Text = "NO TEXTURE"
+		txt.TextColor3 = C.textMuted
+		txt.Font = Enum.Font.Arcade
+		txt.TextSize = 10
+		txt.Parent = preview
+	end
+
+	if InfoAnimOn then
+		Anim.fadeIn(preview, 0, 0.3)
+	end
+
+	local d = getInfo(o)
+	local shown = {}
+
+	local function markShown(label)
+		shown[string.lower(tostring(label))] = true
+	end
+
+	local function alreadyShown(label)
+		return shown[string.lower(tostring(label))] == true
+	end
+
+	infoLine("CLASS", d.Class or "ParticleEmitter")
+	markShown("CLASS")
+	infoLine("PATH", d.Path or "")
+	markShown("PATH")
+	infoLine("EMIT", tostring(d.EmitCount or 1) .. " particles")
+	markShown("EMIT")
+	do
+		local texVal = (d.Texture and d.Texture ~= "") and d.Texture or "None"
+		infoLine("TEXTURE", texVal, { copyText = (texVal ~= "None") and texVal or nil })
+	end
+	markShown("TEXTURE")
+
+	if d.Properties then
+		for _, p in ipairs(particleProperties) do
+			if p == "FlipbookSizeX" or p == "FlipbookSizeY" then
+			elseif INFO_HEADER_PROPS[p] then
+			elseif alreadyShown(p) then
+			elseif d.Properties[p] ~= nil then
+				local raw = deserialize(d.Properties[p])
+				local display = friendly(p, raw, false)
+				local precise = friendly(p, raw, true)
+				if p == "FlipbookLayout" then
+					local layoutVal = raw
+					local isCustom = false
+					if typeof(layoutVal) == "EnumItem" then
+						isCustom = (layoutVal.Name == "Custom")
+					elseif type(layoutVal) == "string" then
+						isCustom = (layoutVal == "Custom")
+					end
+					if isCustom then
+						local sx = tonumber(deserialize(d.Properties.FlipbookSizeX)) or 1
+						local sy = tonumber(deserialize(d.Properties.FlipbookSizeY)) or 1
+						sx = math.floor(sx)
+						sy = math.floor(sy)
+						display = string.format("Custom (%dx%d)", sx, sy)
+						precise = display
+					end
+				end
+				infoLine(p, display, { preciseValue = precise })
+				markShown(p)
+			end
+		end
+	end
+
+	if d.Attributes then
+		for n, v in pairs(d.Attributes) do
+			if not alreadyShown(n) then
+				local raw = deserialize(v)
+				local display = friendly(n, raw, false)
+				local precise = friendly(n, raw, true)
+				infoLine(n, display, { preciseValue = precise })
+				markShown(n)
+			end
+		end
+	end
+
+	InfoAnimOn = false
+end
+
+local function updateSelectionVisuals()
+	for _, row in ipairs(Rows) do
+		local o = RowData[row]
+		if o then
+			local target = (o == Selected) and C.rowSelect or C.row
+			if RowTarget[row] ~= target then
+				RowTarget[row] = target
+				local old = RowTweens[row]
+				if old then old:Cancel() end
+				RowTweens[row] = Anim.tween(row, 0.18, { BackgroundColor3 = target })
+			end
+		end
+	end
+end
+
+local function createRow()
+	local s = uiScale
+	local rh = math.max(28, math.floor(RowHeight * 0.9))
+	local iconSz = math.max(18, math.floor(26 * s + 0.5))
+	local iconPad = math.max(4, math.floor(6 * s + 0.5))
+	local nameTs = math.max(8, math.floor(10 * s + 0.5))
+	local pathTs = math.max(7, math.floor(8 * s + 0.5))
+	local countTs = math.max(7, math.floor(9 * s + 0.5))
+
+	local row = Instance.new("TextButton")
+	row.Size = UDim2.new(1, -4, 0, rh)
+	row.BackgroundColor3 = C.row
+	row.BorderSizePixel = 0
+	row.Text = ""
+	row.AutoButtonColor = false
+	row.Visible = false
+	row.Parent = ListContent
+	Instance.new("UICorner", row).CornerRadius = UDim.new(0, 0)
+	Metal.panel(row, "raised", 0.4)
+	Anim.button(row, { color = C.accent, hoverTransparency = 0.45 })
+
+	local icon = Instance.new("Frame")
+	icon.Name = "Icon"
+	icon.Size = UDim2.fromOffset(iconSz, iconSz)
+	icon.Position = UDim2.fromOffset(iconPad, math.floor((rh - iconSz) / 2))
+	icon.BackgroundColor3 = C.surface3
+	icon.BorderSizePixel = 0
+	icon.Parent = row
+	Instance.new("UICorner", icon).CornerRadius = UDim.new(0, 0)
+
+	local image = Instance.new("ImageLabel")
+	image.Name = "Image"
+	image.Size = UDim2.fromScale(1, 1)
+	image.BackgroundTransparency = 1
+	image.ScaleType = Enum.ScaleType.Fit
+	image.Parent = icon
+
+	local symbol = Instance.new("TextLabel")
+	symbol.Name = "Symbol"
+	symbol.Size = UDim2.fromScale(1, 1)
+	symbol.BackgroundTransparency = 1
+	symbol.Text = "✦"
+	symbol.TextColor3 = C.accent
+	symbol.Font = Enum.Font.Arcade
+	symbol.TextSize = math.max(9, math.floor(12 * s + 0.5))
+	symbol.Visible = false
+	symbol.Parent = icon
+
+	local textLeft = iconPad + iconSz + 6
+	local name = Instance.new("TextLabel")
+	name.Name = "NameLabel"
+	name.Size = UDim2.new(1, -(textLeft + math.floor(36 * s)), 0, math.floor(rh * 0.45))
+	name.Position = UDim2.fromOffset(textLeft, math.floor(rh * 0.08))
+	name.BackgroundTransparency = 1
+	name.TextColor3 = C.text
+	name.Font = Enum.Font.Arcade
+	name.TextSize = nameTs
+	name.TextXAlignment = Enum.TextXAlignment.Left
+	name.TextTruncate = Enum.TextTruncate.AtEnd
+	name.Parent = row
+
+	local path = Instance.new("TextLabel")
+	path.Name = "PathLabel"
+	path.Size = UDim2.new(1, -(textLeft + 8), 0, math.floor(rh * 0.4))
+	path.Position = UDim2.fromOffset(textLeft, math.floor(rh * 0.52))
+	path.BackgroundTransparency = 1
+	path.TextColor3 = C.textMuted
+	path.Font = Enum.Font.Arcade
+	path.TextSize = pathTs
+	path.TextXAlignment = Enum.TextXAlignment.Left
+	path.TextTruncate = Enum.TextTruncate.AtEnd
+	path.Parent = row
+
+	local count = Instance.new("TextLabel")
+	count.Name = "CountLabel"
+	count.Size = UDim2.fromOffset(math.floor(32 * s), math.floor(20 * s))
+	count.Position = UDim2.new(1, -math.floor(36 * s), 0.5, -math.floor(10 * s))
+	count.BackgroundTransparency = 1
+	count.TextColor3 = C.textDim
+	count.Font = Enum.Font.Arcade
+	count.TextSize = countTs
+	count.Parent = row
+
+	row.MouseButton1Click:Connect(function()
+		local o = RowData[row]
+		if not o then return end
+		showInfo(o)
+		updateSelectionVisuals()
+	end)
+
+	return row
+end
+
+local function setupRows(viewH)
+	for _, r in ipairs(Rows) do
+		r:Destroy()
+	end
+	table.clear(Rows)
+	table.clear(RowData)
+	table.clear(RowTweens)
+	table.clear(RowTarget)
+	local listH = viewH or ListViewH
+	if listH < 50 then listH = 250 end
+	local count = math.ceil(listH / RowHeight) + Overscan * 2 + 4
+	for i = 1, count do
+		Rows[i] = createRow()
+	end
+end
+
+local function setRow(row, index, o)
+	row.Visible = true
+	row.Position = UDim2.fromOffset(0, (index - 1) * RowHeight)
+	RowData[row] = o
+
+	local target = (o == Selected) and C.rowSelect or C.row
+	local running = RowTweens[row]
+	if running then
+		running:Cancel()
+		RowTweens[row] = nil
+	end
+	RowTarget[row] = target
+	row.BackgroundColor3 = target
+
+	local texture = getTexture(o)
+	local image = row.Icon.Image
+	local symbol = row.Icon.Symbol
+
+	if texture ~= "" then
+		image.Image = texture
+		image.Visible = true
+		symbol.Visible = false
+	else
+		image.Image = ""
+		image.Visible = false
+		symbol.Visible = true
+	end
+
+	row.NameLabel.Text = (type(o) == "table" and o.Name) or o.Name or "Particle"
+	row.PathLabel.Text = getPath(o)
+	row.CountLabel.Text = "×" .. tostring(getEmitCount(o))
+end
+
+rebuildFilter = function(forceYield)
+	if FilterBusy then
+		Metal.FilterAgain = true
+		return
+	end
+	FilterBusy = true
+
+	local result = {}
+	local q = Search.Text:lower()
+	local listLen = #ParticleList
+	local shouldYield = forceYield or listLen > 6000
+
+	if q == "" then
+		for i = 1, listLen do
+			local o = ParticleList[i]
+			if isValidParticle(o) then
+				result[#result + 1] = o
+			else
+				if type(o) ~= "table" then
+					ParticleMap[o] = nil
+				end
+			end
+			if shouldYield and i % 5000 == 0 then
+				Status.Text = "Filter " .. i
+				task.wait()
+			end
+		end
+	else
+		local sortData = {}
+		for i = 1, listLen do
+			local o = ParticleList[i]
+			if isValidParticle(o) then
+				local n = (type(o) == "table" and o.Name) or o.Name or "Particle"
+				local p = getPath(o)
+				local nLower = n:lower()
+				local pLower = p:lower()
+				if nLower:find(q, 1, true) or pLower:find(q, 1, true) then
+					result[#result + 1] = o
+					sortData[o] = { name = nLower, path = pLower }
+				end
+			else
+				if type(o) ~= "table" then
+					ParticleMap[o] = nil
+				end
+			end
+			if shouldYield and i % 4000 == 0 then
+				Status.Text = "Filter " .. i
+				task.wait()
+			end
+		end
+		if #result > 1 then
+			table.sort(result, function(a, b)
+				local aData = sortData[a]
+				local bData = sortData[b]
+				if aData.path == bData.path then
+					return aData.name < bData.name
+				end
+				return aData.path < bData.path
+			end)
+		end
+	end
+
+	Filtered = result
+	local selectedVisible = false
+	if Selected ~= nil then
+		for i = 1, #Filtered do
+			if Filtered[i] == Selected then
+				selectedVisible = true
+				break
+			end
+		end
+	end
+	if #Filtered > 0 and not selectedVisible then
+		showInfo(Filtered[1], true, true)
+	end
+	local height = math.max(#Filtered * RowHeight, ListViewH + 1)
+	if height > 5000000 then
+		height = 5000000
+	end
+	ListContent.Size = UDim2.new(1, -4, 0, height)
+	List.CanvasSize = UDim2.fromOffset(0, height)
+
+	Status.Text = tostring(#Filtered) .. "/" .. tostring(#ParticleList)
+
+	LastFirst = -1
+	LastLast = -1
+	FilterBusy = false
+
+	if Metal.FilterAgain then
+		Metal.FilterAgain = false
+		task.defer(function()
+			rebuildFilter(forceYield)
+			if Metal.updateRows then Metal.updateRows() end
+		end)
+	end
+end
+
+local function updateRows()
+	local first = math.max(1, math.floor(List.CanvasPosition.Y / RowHeight) - Overscan + 1)
+	local visible = math.ceil(ListViewH / RowHeight)
+	local last = math.min(#Filtered, first + visible + Overscan * 2)
+
+	if first == LastFirst and last == LastLast then
+		updateSelectionVisuals()
+		return
+	end
+
+	LastFirst = first
+	LastLast = last
+
+	for i, row in ipairs(Rows) do
+		local index = first + i - 1
+		if index <= last then
+			local o = Filtered[index]
+			if o and isValidParticle(o) then
+				setRow(row, index, o)
+			else
+				row.Visible = false
+				RowData[row] = nil
+			end
+		else
+			row.Visible = false
+			RowData[row] = nil
+		end
+	end
+end
+
+Metal.updateRows = updateRows
+List:GetPropertyChangedSignal("CanvasPosition"):Connect(updateRows)
+
+local function addParticle(o)
+	if not o then return false end
+	if #ParticleList >= MAX_PARTICLES then
+		return false
+	end
+	if type(o) == "table" then
+		if not ParticleMap[o] then
+			ParticleMap[o] = true
+			ParticleList[#ParticleList + 1] = o
+			return true
+		end
+		return false
+	end
+	if o.Parent and o:IsA("ParticleEmitter") then
+		if not ParticleMap[o] then
+			ParticleMap[o] = true
+			ParticleList[#ParticleList + 1] = o
+			return true
+		end
+	end
+	return false
+end
+
+-- AUTO SCAN UI
+local RenderedAutoMap = {}
+
+local function clearAutoList()
+	for _, child in ipairs(AutoList:GetChildren()) do
+		if child:IsA("TextButton") or (child:IsA("TextLabel") and (child.Name == "EmptyState" or child.Name == "MoreState")) then
+			child:Destroy()
+		end
+	end
+	table.clear(RenderedAutoMap)
+end
+
+local function renderAutoPage()
+	if not AutoPage.Visible then return end
+
+	local validList = {}
+	local newSet = {}
+	for i = 1, #AutoScannedList do
+		local data = AutoScannedList[i]
+		if isValidParticle(data) then
+			validList[#validList + 1] = data
+			newSet[data] = true
+		else
+			if RenderedAutoMap[data] then
+				RenderedAutoMap[data]:Destroy()
+				RenderedAutoMap[data] = nil
+			end
+		end
+	end
+	AutoScannedList = validList
+	AutoScannedSet = newSet
+	AutoScannedCount = #validList
+
+	local totalAuto = AutoScannedCount
+	local savedCanvas = AutoList.CanvasPosition
+
+	clearAutoList()
+
+	if totalAuto == 0 then
+		local empty = Instance.new("TextLabel")
+		empty.Name = "EmptyState"
+		empty.Size = UDim2.new(1, -12, 0, 44)
+		empty.BackgroundTransparency = 1
+		empty.Text = "No realtime emitters captured yet.\nEnable Auto Scan to start."
+		empty.TextColor3 = C.textMuted
+		empty.Font = Enum.Font.Arcade
+		empty.TextSize = 11
+		empty.TextWrapped = true
+		empty.Parent = AutoList
+		if AnimateRender then
+			Anim.fadeIn(empty, 0.1, 0.35)
+		end
+		return
+	end
+
+	local firstShown = math.max(1, totalAuto - 299)
+	if firstShown > 1 then
+		local note = Instance.new("TextLabel")
+		note.Name = "MoreState"
+		note.Size = UDim2.new(1, -12, 0, 16)
+		note.BackgroundTransparency = 1
+		note.LayoutOrder = 0
+		note.Text = "Showing newest 300 of " .. tostring(totalAuto)
+		note.TextColor3 = C.textMuted
+		note.Font = Enum.Font.Arcade
+		note.TextSize = 9
+		note.Parent = AutoList
+	end
+
+	for i = firstShown, totalAuto do
+		local data = validList[i]
+		local row = Instance.new("TextButton")
+		row.Size = UDim2.new(1, -2, 0, 36)
+		row.BackgroundColor3 = C.row
+		row.BorderSizePixel = 0
+		row.Text = ""
+		row.AutoButtonColor = false
+		row.LayoutOrder = i
+		row.Parent = AutoList
+		Instance.new("UICorner", row).CornerRadius = UDim.new(0, 0)
+		Metal.panel(row, "raised", 0.4)
+
+		local name = Instance.new("TextLabel")
+		name.Size = UDim2.new(1, -12, 0, 16)
+		name.Position = UDim2.fromOffset(8, 3)
+		name.BackgroundTransparency = 1
+		name.Text = data.Name or "ParticleEmitter"
+		name.TextColor3 = C.text
+		name.Font = Enum.Font.Arcade
+		name.TextSize = 10
+		name.TextXAlignment = Enum.TextXAlignment.Left
+		name.TextTruncate = Enum.TextTruncate.AtEnd
+		name.Parent = row
+
+		local path = Instance.new("TextLabel")
+		path.Size = UDim2.new(1, -12, 0, 13)
+		path.Position = UDim2.fromOffset(8, 19)
+		path.BackgroundTransparency = 1
+		path.Text = data.Path or ""
+		path.TextColor3 = C.textMuted
+		path.Font = Enum.Font.Arcade
+		path.TextSize = 8
+		path.TextXAlignment = Enum.TextXAlignment.Left
+		path.TextTruncate = Enum.TextTruncate.AtEnd
+		path.Parent = row
+
+		Anim.rowHover(row, C.row, C.rowHover)
+
+		row.MouseButton1Click:Connect(function()
+			if not isValidParticle(data) then return end
+			setPage(1)
+			task.defer(function()
+				if not isValidParticle(data) then return end
+				showInfo(data)
+				updateSelectionVisuals()
+				updateRows()
+			end)
+		end)
+
+		RenderedAutoMap[data] = row
+
+		if AnimateRender and i <= 14 then
+			Anim.fadeIn(row, (i - 1) * 0.035, 0.3)
+		end
+	end
+	if not AnimateRender then
+		task.delay(0.03, function()
+			if AutoList.Parent then
+				AutoList.CanvasPosition = savedCanvas
+			end
+		end)
+	end
+end
+
+renderFavPage = function()
+	for _, child in ipairs(FavList:GetChildren()) do
+		if child:IsA("GuiObject") then
+			child:Destroy()
+		end
+	end
+
+	rebuildFavouritesList()
+	local count = #FavouritesList
+
+	if count == 0 then
+		local empty = Instance.new("TextLabel")
+		empty.Name = "EmptyState"
+		empty.Size = UDim2.new(1, -12, 0, 50)
+		empty.BackgroundTransparency = 1
+		empty.Text = "No favourited particles yet.\nSelect a particle and press ♥"
+		empty.TextColor3 = C.textMuted
+		empty.Font = Enum.Font.Arcade
+		empty.TextSize = 11
+		empty.TextWrapped = true
+		empty.Parent = FavList
+		FavHeader.Text = "Favourited particles (0)"
+		if AnimateRender then
+			Anim.fadeIn(empty, 0.1, 0.35)
+		end
+		return
+	end
+
+	FavHeader.Text = "Favourited particles (" .. tostring(count) .. ")"
+
+	for i, data in ipairs(FavouritesList) do
+		local row = Instance.new("Frame")
+		row.Size = UDim2.new(1, -2, 0, 50)
+		row.BackgroundColor3 = C.row
+		row.BorderSizePixel = 0
+		row.LayoutOrder = i
+		row.Parent = FavList
+		Instance.new("UICorner", row).CornerRadius = UDim.new(0, 0)
+		Metal.panel(row, "raised", 0.4)
+
+		local name = Instance.new("TextLabel")
+		name.Size = UDim2.new(1, -160, 0, 18)
+		name.Position = UDim2.fromOffset(10, 5)
+		name.BackgroundTransparency = 1
+		name.Text = tostring(data.Name or "Particle")
+		name.TextColor3 = C.text
+		name.Font = Enum.Font.Arcade
+		name.TextSize = 11
+		name.TextXAlignment = Enum.TextXAlignment.Left
+		name.TextTruncate = Enum.TextTruncate.AtEnd
+		name.Parent = row
+
+		local path = Instance.new("TextLabel")
+		path.Size = UDim2.new(1, -160, 0, 16)
+		path.Position = UDim2.fromOffset(10, 25)
+		path.BackgroundTransparency = 1
+		path.Text = tostring(data.Path or "")
+		path.TextColor3 = C.textMuted
+		path.Font = Enum.Font.Arcade
+		path.TextSize = 9
+		path.TextXAlignment = Enum.TextXAlignment.Left
+		path.TextTruncate = Enum.TextTruncate.AtEnd
+		path.Parent = row
+
+		local openBtn = Instance.new("TextButton")
+		openBtn.Size = UDim2.fromOffset(52, 30)
+		openBtn.Position = UDim2.new(1, -118, 0.5, -15)
+		openBtn.BackgroundColor3 = C.greenDark
+		openBtn.BorderSizePixel = 0
+		openBtn.Text = "VIEW"
+		openBtn.TextColor3 = C.text
+		openBtn.Font = Enum.Font.Arcade
+		openBtn.TextSize = 9
+		openBtn.AutoButtonColor = false
+		openBtn.Parent = row
+		Instance.new("UICorner", openBtn).CornerRadius = UDim.new(0, 0)
+		Metal.gloss(openBtn, 6)
+		Anim.button(openBtn)
+
+		local removeBtn = Instance.new("TextButton")
+		removeBtn.Size = UDim2.fromOffset(52, 30)
+		removeBtn.Position = UDim2.new(1, -58, 0.5, -15)
+		removeBtn.BackgroundColor3 = C.redDark
+		removeBtn.BorderSizePixel = 0
+		removeBtn.Text = "UNFAV"
+		removeBtn.TextColor3 = C.text
+		removeBtn.Font = Enum.Font.Arcade
+		removeBtn.TextSize = 9
+		removeBtn.AutoButtonColor = false
+		removeBtn.Parent = row
+		Instance.new("UICorner", removeBtn).CornerRadius = UDim.new(0, 0)
+		Metal.gloss(removeBtn, 6)
+		Anim.button(removeBtn)
+
+		local capturedData = data
+
+		openBtn.MouseButton1Click:Connect(function()
+			addParticle(capturedData)
+			setPage(1)
+			task.defer(function()
+				if not isValidParticle(capturedData) then return end
+				showInfo(capturedData)
+				updateSelectionVisuals()
+				updateRows()
+			end)
+		end)
+
+		removeBtn.MouseButton1Click:Connect(function()
+			removeFavourite(capturedData)
+			updateFavButton()
+			renderFavPage()
+		end)
+
+		if AnimateRender and i <= 14 then
+			Anim.fadeIn(row, (i - 1) * 0.035, 0.3)
+		end
+	end
+end
+
+FavRefresh.MouseButton1Click:Connect(function()
+	loadFavouritesFromDisk()
+	renderFavPage()
+end)
+
+-- AUTO SCAN PIPELINE
+local AutoQueue = {}
+local AutoQueueHead = 1
+local AutoQueueTail = 1
+local AutoSeenSet = setmetatable({}, { __mode = "k" })
+local AutoDirty = false
+
+Metal.Conns[#Metal.Conns + 1] = workspace.DescendantAdded:Connect(function(descendant)
+	if not AutoScanning then return end
+	if descendant:IsA("ParticleEmitter") then
+		if not AutoSeenSet[descendant] then
+			AutoSeenSet[descendant] = true
+			local queued = AutoQueueTail - AutoQueueHead
+			if queued >= MAX_AUTO_QUEUE then
+				AutoQueue[AutoQueueHead] = nil
+				AutoQueueHead += 1
+			end
+			AutoQueue[AutoQueueTail] = descendant
+			AutoQueueTail += 1
+		end
+	end
+end)
+
+do
+	local TIME_BETWEEN_UI_UPDATES = 0.4
+	local lastUIUpdate = os.clock()
+	local MAX_PROCESS_PER_FRAME = 3
+	local AUTO_TIME_BUDGET = 0.0012
+
+	Metal.Conns[#Metal.Conns + 1] = RunService.Heartbeat:Connect(function()
+		if not AutoScanning then return end
+
+		local startTime = os.clock()
+		local processed = 0
+		local atAutoCap = AutoScannedCount >= MAX_AUTO_CAPTURES
+
+		while AutoQueueHead < AutoQueueTail
+			and processed < MAX_PROCESS_PER_FRAME
+			and (os.clock() - startTime) < AUTO_TIME_BUDGET
+		do
+			local emitter = AutoQueue[AutoQueueHead]
+			AutoQueue[AutoQueueHead] = nil
+			AutoQueueHead += 1
+			processed += 1
+
+			if not atAutoCap and emitter and emitter.Parent and emitter:IsA("ParticleEmitter") then
+				local ok, snapshot = pcall(getInfo, emitter)
+				if ok and type(snapshot) == "table" then
+					if not AutoScannedSet[snapshot] then
+						AutoScannedSet[snapshot] = true
+						AutoScannedList[#AutoScannedList + 1] = snapshot
+						AutoScannedCount = #AutoScannedList
+						atAutoCap = AutoScannedCount >= MAX_AUTO_CAPTURES
+						AutoDirty = true
+					end
+				end
+			end
+		end
+
+		if AutoQueueHead == AutoQueueTail then
+			if AutoQueueHead > 500 then
+				AutoQueue = {}
+				AutoQueueHead = 1
+				AutoQueueTail = 1
+			else
+				AutoQueueHead = 1
+				AutoQueueTail = 1
+			end
+		end
+
+		if AutoDirty and (os.clock() - lastUIUpdate) >= TIME_BETWEEN_UI_UPDATES then
+			AutoDirty = false
+			lastUIUpdate = os.clock()
+			Status.Text = tostring(#Filtered) .. "/" .. tostring(#ParticleList)
+			if AutoPage.Visible then
+				renderAutoPage()
+			end
+		end
+	end)
+end
+
+local function clearMainParticles()
+	stopPreview()
+	Selected = nil
+	clearInfo()
+	InfoTitle.Text = "Select a particle"
+	updateFavButton()
+
+	table.clear(ParticleMap)
+	table.clear(ParticleList)
+	table.clear(Filtered)
+	FilterBusy = false
+
+	LastFirst = -1
+	LastLast = -1
+	for _, row in ipairs(Rows) do
+		row.Visible = false
+		RowData[row] = nil
+	end
+	ListContent.Size = UDim2.new(1, -4, 0, 1)
+	List.CanvasSize = UDim2.new()
+	Status.Text = "0/0"
+end
+
+local function clearAutoScanned()
+	table.clear(AutoScannedSet)
+	table.clear(AutoScannedList)
+	AutoScannedCount = 0
+	clearAutoList()
+
+	for i = AutoQueueHead, AutoQueueTail - 1 do
+		AutoQueue[i] = nil
+	end
+	AutoQueue = {}
+	AutoQueueHead = 1
+	AutoQueueTail = 1
+	AutoSeenSet = setmetatable({}, { __mode = "k" })
+	AutoDirty = false
+
+	if AutoPage.Visible then
+		renderAutoPage()
+	end
+end
+
+ClearBtn.MouseButton1Click:Connect(function()
+	clearMainParticles()
+	ClearBtn.Text = "OK"
+	task.delay(0.8, function()
+		if ClearBtn and ClearBtn.Parent then
+			ClearBtn.Text = "CLEAR"
+		end
+	end)
+end)
+
+AutoClearBtn.MouseButton1Click:Connect(function()
+	clearAutoScanned()
+	AutoClearBtn.Text = "OK"
+	task.delay(0.8, function()
+		if AutoClearBtn and AutoClearBtn.Parent then
+			AutoClearBtn.Text = "CLEAR"
+		end
+	end)
+end)
+
+local scan
+do
+	local SCAN_YIELD_EVERY = 120
+	local SCAN_STATUS_EVERY = 400
+
+	local function shouldSkipInstance(inst)
+		if not inst then return true end
+		local name = inst.Name
+		if inst == CoreGui then return true end
+		if name == "CoreGui" or name == "Chat" or name == "BubbleChat" then return true end
+		local className = inst.ClassName
+		if className == "CoreGui" or className == "PlayerGui" then return true end
+		return false
+	end
+
+	scan = function()
+		if ScanBusy then return end
+		ScanBusy = true
+		Refresh.Text = "..."
+		setBg(Refresh, C.orange)
+		Status.Text = "Scanning..."
+
+		task.spawn(function()
+			local found = 0
+			local visited = 0
+			local stack = {}
+
+			local roots = { workspace }
+			pcall(function()
+				table.insert(roots, game:GetService("ReplicatedStorage"))
+			end)
+			pcall(function()
+				table.insert(roots, game:GetService("ReplicatedFirst"))
+			end)
+			pcall(function()
+				table.insert(roots, Players)
+			end)
+			pcall(function()
+				table.insert(roots, game:GetService("Lighting"))
+			end)
+			pcall(function()
+				table.insert(roots, game:GetService("StarterGui"))
+			end)
+			pcall(function()
+				table.insert(roots, game:GetService("StarterPack"))
+			end)
+			pcall(function()
+				table.insert(roots, game:GetService("StarterPlayer"))
+			end)
+
+			for _, root in ipairs(roots) do
+				if root then
+					stack[#stack + 1] = root
+				end
+			end
+
+			while #stack > 0 do
+				local inst = table.remove(stack)
+				visited += 1
+
+				if not shouldSkipInstance(inst) then
+					local isEmitter = false
+					local ok = pcall(function()
+						isEmitter = inst:IsA("ParticleEmitter")
+					end)
+					if ok and isEmitter then
+						if addParticle(inst) then
+							found += 1
+						end
+					end
+
+					local childrenOk, children = pcall(function()
+						return inst:GetChildren()
+					end)
+					if childrenOk and type(children) == "table" then
+						for i = 1, #children do
+							stack[#stack + 1] = children[i]
+						end
+					end
+				end
+
+				if visited % SCAN_YIELD_EVERY == 0 then
+					if visited % SCAN_STATUS_EVERY == 0 then
+						Status.Text = "S " .. tostring(found)
+					end
+					task.wait()
+				end
+			end
+
+			Status.Text = "Filter..."
+			rebuildFilter(true)
+			updateRows()
+
+			ScanBusy = false
+			if Refresh.Parent then
+				Refresh.Text = "Refresh"
+				setBg(Refresh, C.surface3)
+			end
+			Status.Text = tostring(#Filtered) .. "/" .. tostring(#ParticleList)
+		end)
+	end
+end
+
+AutoToggleBtn.MouseButton1Click:Connect(function()
+	AutoScanning = not AutoScanning
+	AutoToggleBtn.Text = AutoScanning and "AUTO SCAN: ON" or "AUTO SCAN: OFF"
+	setBg(AutoToggleBtn, AutoScanning and C.greenDark or C.surface3, 0.25)
+end)
+
+Refresh.MouseButton1Click:Connect(scan)
+
+local searchToken = 0
+Search:GetPropertyChangedSignal("Text"):Connect(function()
+	searchToken += 1
+	local token = searchToken
+	local delayTime = (#ParticleList > 15000) and 0.08 or 0.03
+	task.delay(delayTime, function()
+		if token ~= searchToken then return end
+		rebuildFilter(#ParticleList > 6000)
+		updateRows()
+	end)
+end)
+
+-- ===================== SAVE (texture library) =====================
+-- SAVE collects texture ids and flipbook settings already present on scanned particle objects/snapshots.
+-- It never analyzes texture pixels or invokes the image grid detector.
+
+local saving = false
+local refreshSavedGames
+
+local function prepareLibraryObjects(objectLists, statusLabel)
+	local added = 0
+	local processed = 0
+	local seenTextures = {}
+
+	local function consider(o)
+		if o == nil then return end
+		local okTex, tex = pcall(getTexture, o)
+		if not okTex or type(tex) ~= "string" or tex == "" then return end
+
+		local pName
+		local pPath
+		if type(o) == "table" then
+			pName = o.Name
+			pPath = o.Path
+		else
+			local okName, value = pcall(function() return o.Name end)
+			if okName then pName = value end
+			local okPath, valuePath = pcall(getPath, o)
+			if okPath then pPath = valuePath end
+		end
+		if type(pPath) ~= "string" then pPath = "" end
+
+		local id = normalizeTextureId(tex)
+		if not id then return end
+
+		local grid
+		local okGrid, particleGrid = pcall(Flip.safeGrid, o)
+		if okGrid and type(particleGrid) == "table" and tonumber(particleGrid.C) and tonumber(particleGrid.R) then
+			grid = particleGrid
+		elseif Flip.Manual[id] then
+			grid = Flip.Manual[id]
+		end
+
+		if not seenTextures[id] then
+			seenTextures[id] = true
+			if addTextureToLibrary(id, pName, pPath, grid) then added += 1 end
+		elseif grid then
+			addTextureToLibrary(id, pName, pPath, grid)
+		end
+	end
+
+	for _, list in ipairs(objectLists) do
+		if type(list) == "table" then
+			for i = 1, #list do
+				consider(list[i])
+				processed += 1
+				if statusLabel and processed % 250 == 0 then
+					statusLabel.Text = "Saving " .. tostring(processed)
+					task.wait()
+				end
+			end
+		end
+	end
+
+	return added
+end
+
+local function saveCurrent()
+	if saving then return false end
+	saving = true
+	Save.Text = "SAVING..."
+	setBg(Save, C.orange)
+
+	-- start from what is already on disk so nothing is lost and nothing is duplicated
+	loadLibraryFromDisk()
+
+	local added = prepareLibraryObjects({ ParticleList, AutoScannedList }, Status)
+
+	local ok, err = saveLibraryToDisk()
+	saving = false
+
+	if not ok then
+		warn("[ParticleInspector] Library save failed:", err)
+		Save.Text = "FAILED"
+		setBg(Save, C.red)
+	else
+		Save.Text = "+" .. tostring(added)
+		setBg(Save, added > 0 and C.green or C.surface3)
+	end
+	Status.Text = tostring(#TextureLibrary) .. " tex"
+
+	if SavedPage.Visible and refreshSavedGames then
+		refreshSavedGames()
+	end
+
+	task.delay(2.2, function()
+		if Save.Parent then
+			Save.Text = "SAVE"
+			setBg(Save, C.accent, 0.3)
+		end
+		if Status.Parent and not minimized then
+			Status.Text = tostring(#Filtered) .. "/" .. tostring(#ParticleList)
+		end
+	end)
+	return ok
+end
+
+Save.MouseButton1Click:Connect(saveCurrent)
+
+-- ===================== AUTO SCAN PAGE: SAVE TO LIBRARY BUTTON =====================
+-- Saves the auto scanner's captured texture ids and particle flipbook settings directly.
+-- This does not run pixel analysis or the image grid detector.
+
+Lib.savingAuto = false
+
+Lib.AutoSave = Instance.new("TextButton")
+Lib.AutoSave.Name = "AutoSaveBtn"
+Lib.AutoSave.Size = UDim2.fromOffset(58, 26)
+Lib.AutoSave.Position = UDim2.new(1, -240, 0, 1)
+Lib.AutoSave.BackgroundColor3 = C.accent
+Lib.AutoSave.BorderSizePixel = 0
+Lib.AutoSave.AutoButtonColor = false
+Lib.AutoSave.Text = "SAVE"
+Lib.AutoSave.TextColor3 = C.text
+Lib.AutoSave.Font = Enum.Font.Arcade
+Lib.AutoSave.TextSize = 9
+Lib.AutoSave.Parent = AutoPage
+Metal.icon(Lib.AutoSave, Metal.ICON_SAVE, "SAVE")
+Instance.new("UICorner", Lib.AutoSave).CornerRadius = UDim.new(0, 0)
+Metal.gloss(Lib.AutoSave, 0)
+Anim.button(Lib.AutoSave)
+
+Lib.saveAuto = function()
+	if Lib.savingAuto then return end
+	local btn = Lib.AutoSave
+
+	if #AutoScannedList == 0 then
+		btn.Text = "NONE"
+		setBg(btn, C.surface3)
+		task.delay(1.5, function()
+			if btn and btn.Parent then
+				btn.Text = "SAVE"
+				setBg(btn, C.accent)
+			end
+		end)
+		return
+	end
+
+	Lib.savingAuto = true
+	btn.Text = "SAVING..."
+	setBg(btn, C.orange)
+
+	-- start from what is already on disk so nothing is lost and nothing is duplicated
+	loadLibraryFromDisk()
+
+	local added = prepareLibraryObjects({ AutoScannedList }, Status)
+
+	local ok, err = saveLibraryToDisk()
+	Lib.savingAuto = false
+
+	if not ok then
+		warn("[ParticleInspector] Auto scan library save failed:", err)
+		btn.Text = "FAILED"
+		setBg(btn, C.red)
+	else
+		btn.Text = "+" .. tostring(added)
+		setBg(btn, added > 0 and C.green or C.surface3)
+	end
+
+	if SavedPage.Visible and refreshSavedGames then
+		refreshSavedGames()
+	end
+
+	task.delay(2.2, function()
+		if btn and btn.Parent then
+			btn.Text = "SAVE"
+			setBg(btn, C.accent)
+		end
+	end)
+end
+
+Lib.AutoSave.MouseButton1Click:Connect(Lib.saveAuto)
+
+-- ===================== LIBRARY PAGE =====================
+-- Works like the particles page: a searchable list on the left, and on the right an info
+-- panel that only shows the texture picture and its texture id.
+
+Lib.clearInfo = function()
+	for _, v in ipairs(Lib.InfoScroll:GetChildren()) do
+		if v ~= Lib.InfoLayout then
+			v:Destroy()
+		end
+	end
+end
+
+Lib.resetInfo = function()
+	Lib.Selected = nil
+	Lib.clearInfo()
+	Lib.InfoTitle.Text = "Select a texture"
+end
+
+Lib.highlight = function()
+	for id, row in pairs(Lib.Rows) do
+		if row and row.Parent then
+			local target = (id == Lib.Selected) and C.rowSelect or C.row
+			Anim.tween(row, 0.18, { BackgroundColor3 = target })
+		end
+	end
+end
+
+-- One info line (name on the left, value on the right). Click it to copy the value.
+Lib.infoRow = function(name, value, order)
+	local valueStr = tostring(value)
+	local s = uiScale
+	local textSz = math.max(9, math.floor(11 * s + 0.5))
+	local labelW = math.max(58, math.floor(78 * s + 0.5))
+	local gap = math.max(4, math.floor(8 * s + 0.5))
+	local absW = Lib.InfoScroll.AbsoluteSize.X
+	if absW < 40 then absW = math.max(120, currentW * 0.4) end
+	local valueWidth = math.max(50, absW - labelW - gap - 12)
+	local h = measureTextHeight(valueStr, textSz, Enum.Font.Arcade, valueWidth)
+	local rowH = math.max(math.floor(24 * s), math.ceil(h) + math.floor(12 * s))
+
+	local row = Instance.new("TextButton")
+	row.AutoButtonColor = false
+	row.Text = ""
+	row.Size = UDim2.new(1, -2, 0, rowH)
+	row.BackgroundColor3 = C.surface2
+	row.BorderSizePixel = 0
+	row.ClipsDescendants = true
+	row.LayoutOrder = order or 2
+	row.Parent = Lib.InfoScroll
+	Instance.new("UICorner", row).CornerRadius = UDim.new(0, 0)
+	Metal.panel(row, "raised", 0.35)
+
+	local left = Instance.new("TextLabel")
+	left.Size = UDim2.fromOffset(labelW, rowH)
+	left.Position = UDim2.fromOffset(6, 0)
+	left.BackgroundTransparency = 1
+	left.Text = name
+	left.TextColor3 = C.textMuted
+	left.Font = Enum.Font.Arcade
+	left.TextSize = textSz
+	left.TextXAlignment = Enum.TextXAlignment.Left
+	left.TextYAlignment = Enum.TextYAlignment.Top
+	left.TextTruncate = Enum.TextTruncate.AtEnd
+	left.Parent = row
+
+	local right = Instance.new("TextLabel")
+	right.Size = UDim2.new(1, -(labelW + gap + 4), 1, -8)
+	right.Position = UDim2.fromOffset(labelW + gap, 4)
+	right.BackgroundTransparency = 1
+	right.Text = valueStr
+	right.TextColor3 = C.accent
+	right.Font = Enum.Font.Arcade
+	right.TextSize = textSz
+	right.TextWrapped = true
+	right.TextXAlignment = Enum.TextXAlignment.Left
+	right.TextYAlignment = Enum.TextYAlignment.Top
+	right.Parent = row
+
+	row.MouseButton1Click:Connect(function()
+		local ok = copyToClipboard(valueStr)
+		right.Text = ok and "Copied!" or "Copy failed"
+		right.TextColor3 = ok and C.green or C.red
+		task.delay(0.9, function()
+			if right and right.Parent then
+				right.Text = valueStr
+				right.TextColor3 = C.accent
+			end
+		end)
+	end)
+	row.MouseEnter:Connect(function()
+		Anim.tween(row, 0.12, { BackgroundColor3 = C.rowHover })
+	end)
+	row.MouseLeave:Connect(function()
+		Anim.tween(row, 0.18, { BackgroundColor3 = C.surface2 })
+	end)
+
+	return row
+end
+
+Lib.showInfo = function(texId, noAnim)
+	if type(texId) ~= "string" or texId == "" then return end
+	Lib.Selected = texId
+	Lib.InfoTitle.Text = (LibraryNames[texId] and LibraryNames[texId] ~= "") and LibraryNames[texId] or "Unnamed particle"
+	if not noAnim then
+		Lib.InfoTitle.TextTransparency = 1
+		Anim.tween(Lib.InfoTitle, 0.3, { TextTransparency = 0 })
+	end
+	Lib.clearInfo()
+
+	local w = Lib.InfoScroll.AbsoluteSize.X
+	if w < 40 then w = 190 end
+	local previewH = math.clamp(w - 2, 90, 220)
+
+	local preview = Instance.new("Frame")
+	preview.Size = UDim2.new(1, -2, 0, previewH)
+	preview.BackgroundColor3 = Color3.fromRGB(10, 10, 14)
+	preview.BorderSizePixel = 0
+	preview.LayoutOrder = 1
+	preview.Parent = Lib.InfoScroll
+	Instance.new("UICorner", preview).CornerRadius = UDim.new(0, 0)
+
+	Flip.mount(preview, texId, {
+		getGrid = function() return Flip.Grids[texId] end,
+		srcName = "SAVED",
+	})
+
+	local row = Lib.infoRow("TEXTURE ID", texId)
+	local savedKeywords = LibraryKeywords[texId]
+	if type(savedKeywords) == "table" and #savedKeywords > 0 then
+		Lib.infoRow("PATH", table.concat(savedKeywords, ", "), 3)
+	end
+
+	if not noAnim then
+		Anim.fadeIn(preview, 0, 0.3)
+		Anim.fadeIn(row, 0.05, 0.25)
+	end
+
+	Lib.highlight()
+end
+
+Lib.render = function()
+	for _, v in ipairs(Lib.List:GetChildren()) do
+		if v:IsA("GuiObject") then
+			v:Destroy()
+		end
+	end
+	table.clear(Lib.Rows)
+
+	local total = #TextureLibrary
+	Lib.Search.PlaceholderText = "  Search name, path or id... (" .. tostring(total) .. ")"
+
+	if Lib.Selected and not LibrarySet[Lib.Selected] then
+		Lib.resetInfo()
+	end
+
+	local q = Lib.Search.Text:lower()
+	local filtered = {}
+	for i = total, 1, -1 do -- newest first
+		local id = TextureLibrary[i]
+		local nm = string.lower(LibraryNames[id] or "")
+		local pth = string.lower(table.concat(LibraryKeywords[id] or {}, " "))
+		if q == "" or id:lower():find(q, 1, true) or nm:find(q, 1, true) or pth:find(q, 1, true) then
+			filtered[#filtered + 1] = id
+		end
+	end
+
+	local selectedVisible = false
+	if Lib.Selected ~= nil then
+		for i = 1, #filtered do
+			if filtered[i] == Lib.Selected then
+				selectedVisible = true
+				break
+			end
+		end
+	end
+	if not selectedVisible then
+		Lib.Selected = nil
+		Lib.clearInfo()
+		Lib.InfoTitle.Text = "Select a texture"
+	end
+
+	if #filtered == 0 then
+		local empty = Instance.new("TextLabel")
+		empty.Name = "EmptyState"
+		empty.Size = UDim2.new(1, -12, 0, 50)
+		empty.BackgroundTransparency = 1
+		if total == 0 then
+			empty.Text = "No textures saved yet.\nPress SAVE on the particles page."
+		else
+			empty.Text = "No textures match your search."
+		end
+		empty.TextColor3 = C.textMuted
+		empty.Font = Enum.Font.Arcade
+		empty.TextSize = 11
+		empty.TextWrapped = true
+		empty.Parent = Lib.List
+		if AnimateRender then
+			Anim.fadeIn(empty, 0.1, 0.35)
+		end
+		return
+	end
+
+	local shown = math.min(#filtered, Lib.ShowLimit)
+	local s = uiScale
+	local rh = math.max(28, math.floor(40 * s + 0.5))
+	local iconSz = math.max(18, math.floor(28 * s + 0.5))
+	local iconPad = math.max(4, math.floor(6 * s + 0.5))
+	local textSz = math.max(8, math.floor(10 * s + 0.5))
+
+	for n = 1, shown do
+		local texId = filtered[n]
+
+		local row = Instance.new("TextButton")
+		row.Size = UDim2.new(1, -2, 0, rh)
+		row.BackgroundColor3 = (texId == Lib.Selected) and C.rowSelect or C.row
+		row.BorderSizePixel = 0
+		row.Text = ""
+		row.AutoButtonColor = false
+		row.LayoutOrder = n
+		row.Parent = Lib.List
+		Instance.new("UICorner", row).CornerRadius = UDim.new(0, 0)
+		Metal.panel(row, "raised", 0.4)
+		Anim.button(row, { color = C.accent, hoverTransparency = 0.45 })
+
+		local icon = Instance.new("Frame")
+		icon.Size = UDim2.fromOffset(iconSz, iconSz)
+		icon.Position = UDim2.fromOffset(iconPad, math.floor((rh - iconSz) / 2))
+		icon.BackgroundColor3 = Color3.fromRGB(10, 10, 14)
+		icon.BorderSizePixel = 0
+		icon.Parent = row
+		Instance.new("UICorner", icon).CornerRadius = UDim.new(0, 0)
+
+		local img = Instance.new("ImageLabel")
+		img.Size = UDim2.new(1, -2, 1, -2)
+		img.Position = UDim2.fromOffset(1, 1)
+		img.BackgroundTransparency = 1
+		img.Image = texId
+		img.ScaleType = Enum.ScaleType.Fit
+		img.Parent = icon
+
+		local textLeft = iconPad + iconSz + 6
+		local pName = LibraryNames[texId]
+		if type(pName) ~= "string" or pName == "" then
+			pName = "Unnamed particle"
+		end
+
+		local label = Instance.new("TextLabel")
+		label.Size = UDim2.new(1, -(textLeft + 6), 0, math.floor(rh * 0.45))
+		label.Position = UDim2.fromOffset(textLeft, math.floor(rh * 0.08))
+		label.BackgroundTransparency = 1
+		label.Text = pName
+		label.TextColor3 = C.text
+		label.Font = Enum.Font.Arcade
+		label.TextSize = textSz
+		label.TextXAlignment = Enum.TextXAlignment.Left
+		label.TextTruncate = Enum.TextTruncate.AtEnd
+		label.Parent = row
+
+		local idLabel = Instance.new("TextLabel")
+		idLabel.Size = UDim2.new(1, -(textLeft + 6), 0, math.floor(rh * 0.4))
+		idLabel.Position = UDim2.fromOffset(textLeft, math.floor(rh * 0.52))
+		idLabel.BackgroundTransparency = 1
+		idLabel.Text = texId
+		idLabel.TextColor3 = C.textMuted
+		idLabel.Font = Enum.Font.Arcade
+		idLabel.TextSize = math.max(7, textSz - 2)
+		idLabel.TextXAlignment = Enum.TextXAlignment.Left
+		idLabel.TextTruncate = Enum.TextTruncate.AtEnd
+		idLabel.Parent = row
+
+		Lib.Rows[texId] = row
+
+		row.MouseButton1Click:Connect(function()
+			Lib.showInfo(texId)
+		end)
+
+		if AnimateRender and n <= 14 then
+			Anim.fadeIn(row, (n - 1) * 0.035, 0.3)
+		end
+	end
+
+	if Lib.Selected == nil and #filtered > 0 then
+		Lib.showInfo(filtered[1], true)
+		Lib.highlight()
+	end
+
+	if #filtered > shown then
+		local moreBtn = Instance.new("TextButton")
+		moreBtn.Name = "MoreBtn"
+		moreBtn.Size = UDim2.new(1, -2, 0, 30)
+		moreBtn.BackgroundColor3 = C.surface3
+		moreBtn.BorderSizePixel = 0
+		moreBtn.LayoutOrder = shown + 1
+		moreBtn.Text = "SHOW MORE (" .. tostring(#filtered - shown) .. " left)"
+		moreBtn.TextColor3 = C.text
+		moreBtn.Font = Enum.Font.Arcade
+		moreBtn.TextSize = 10
+		moreBtn.AutoButtonColor = false
+		moreBtn.Parent = Lib.List
+		Instance.new("UICorner", moreBtn).CornerRadius = UDim.new(0, 0)
+		Metal.gloss(moreBtn, 6)
+		Anim.button(moreBtn)
+
+		moreBtn.MouseButton1Click:Connect(function()
+			Lib.ShowLimit += Lib.Batch
+			Lib.render()
+		end)
+	end
+end
+
+refreshSavedGames = function()
+	loadLibraryFromDisk()
+	Lib.render()
+end
+
+Lib.Search:GetPropertyChangedSignal("Text"):Connect(function()
+	Lib.searchToken += 1
+	local token = Lib.searchToken
+	task.delay(0.05, function()
+		if token ~= Lib.searchToken then return end
+		Lib.ShowLimit = Lib.Batch
+		Lib.render()
+	end)
+end)
+
+Lib.Refresh.MouseButton1Click:Connect(function()
+	Lib.ShowLimit = Lib.Batch
+	refreshSavedGames()
+end)
+
+Lib.ClearAll.MouseButton1Click:Connect(function()
+	if Lib.clearingAll then return end
+	Lib.clearingAll = true
+	Lib.ClearAll.Text = "CLEARING"
+	setBg(Lib.ClearAll, C.orange)
+	table.clear(TextureLibrary)
+	table.clear(LibrarySet)
+	table.clear(LibraryNames)
+	table.clear(LibraryKeywords)
+	table.clear(Flip.Grids)
+	Lib.Selected = nil
+	Lib.clearInfo()
+	Lib.InfoTitle.Text = "Select a texture"
+	local ok, err = saveLibraryToDisk()
+	if ok then
+		Lib.Search.Text = ""
+		Lib.ShowLimit = Lib.Batch
+		Lib.render()
+		Lib.ClearAll.Text = "CLEARED"
+		setBg(Lib.ClearAll, C.greenDark)
+	else
+		warn("[ParticleInspector] Clear library failed:", err)
+		Lib.ClearAll.Text = "FAILED"
+		setBg(Lib.ClearAll, C.red)
+	end
+	task.delay(1.6, function()
+		if Lib.ClearAll and Lib.ClearAll.Parent then
+			Lib.ClearAll.Text = "CLEAR ALL"
+			setBg(Lib.ClearAll, C.redDark)
+		end
+		Lib.clearingAll = false
+	end)
+end)
+
+Lib.CopyBtn.MouseButton1Click:Connect(function()
+	if not Lib.Selected then return end
+	local ok = copyToClipboard(Lib.Selected)
+	Lib.CopyBtn.Text = ok and "COPIED" or "FAILED"
+	setBg(Lib.CopyBtn, ok and C.green or C.red, 0.1)
+	task.delay(0.9, function()
+		if Lib.CopyBtn and Lib.CopyBtn.Parent then
+			Lib.CopyBtn.Text = "COPY"
+			setBg(Lib.CopyBtn, C.greenDark, 0.2)
+		end
+	end)
+end)
+
+Lib.DelBtn.MouseButton1Click:Connect(function()
+	if not Lib.Selected then return end
+	if removeTextureFromLibrary(Lib.Selected) then
+		saveLibraryToDisk()
+	end
+	Lib.resetInfo()
+	Lib.render()
+end)
+
+do
+local Mkt = Metal.Mkt
+
+-- ===================== MARKET PAGE =====================
+-- Searches the Creator Store for decals, shows them with thumbnails, and looks up the real
+-- texture (image) id behind each decal so it can be copied or saved into the library.
+
+local function findRequestFunction()
+	local getters = {
+		function() return request end,
+		function() return http_request end,
+		function() return syn and syn.request end,
+		function() return http and http.request end,
+		function() return fluxus and fluxus.request end,
+	}
+	for _, get in ipairs(getters) do
+		local ok, fn = pcall(get)
+		if ok and type(fn) == "function" then
+			return fn
+		end
+	end
+	return nil
+end
+
+-- returns body, statusCode  (body is nil when the request failed)
+local function httpGetText(url)
+	local fn = findRequestFunction()
+	if fn then
+		local ok, res = pcall(fn, { Url = url, Method = "GET", Headers = { ["Accept"] = "application/json" } })
+		if ok and type(res) == "table" then
+			local code = tonumber(res.StatusCode) or 0
+			if type(res.Body) == "string" and res.Body ~= "" and (code == 0 or (code >= 200 and code < 300)) then
+				return res.Body, code
+			end
+			if code ~= 0 then
+				return nil, code
+			end
+		end
+	end
+	local okGet, body = pcall(function()
+		return game:HttpGet(url)
+	end)
+	if okGet and type(body) == "string" and body ~= "" then
+		return body, 200
+	end
+	local okAsync, body2 = pcall(function()
+		return HttpService:GetAsync(url)
+	end)
+	if okAsync and type(body2) == "string" and body2 ~= "" then
+		return body2, 200
+	end
+	return nil, 0
+end
+
+Mkt.thumb = function(id, size)
+	size = size or 150
+	return "rbxthumb://type=Asset&id=" .. tostring(id) .. "&w=" .. tostring(size) .. "&h=" .. tostring(size)
+end
+
+Mkt.flash = function(btn, text, color, baseText, baseColor)
+	btn.Text = text
+	setBg(btn, color, 0.1)
+	task.delay(1.1, function()
+		if btn and btn.Parent then
+			btn.Text = baseText
+			setBg(btn, baseColor, 0.2)
+		end
+	end)
+end
+
+-- Turns a decal id into the id of the image inside it.
+-- Returns "rbxassetid://123" or nil.
+Mkt.resolveTexture = function(decalId)
+	local idStr = tostring(decalId)
+
+	-- 1) load the decal asset and read its Texture
+	local ok, objs = pcall(function()
+		return game:GetObjects("rbxassetid://" .. idStr)
+	end)
+	if ok and type(objs) == "table" then
+		local found = nil
+		for _, obj in ipairs(objs) do
+			local pool = { obj }
+			local okDesc, desc = pcall(function()
+				return obj:GetDescendants()
+			end)
+			if okDesc and type(desc) == "table" then
+				for _, d in ipairs(desc) do
+					pool[#pool + 1] = d
+				end
+			end
+			for _, inst in ipairs(pool) do
+				local okClass, className = pcall(function()
+					return inst.ClassName
+				end)
+				if okClass and (className == "Decal" or className == "Texture") then
+					local okTex, tex = pcall(function()
+						return inst.Texture
+					end)
+					if okTex and tex ~= nil and tostring(tex) ~= "" then
+						found = tostring(tex)
+						break
+					end
+				end
+			end
+			if found then break end
+		end
+		for _, obj in ipairs(objs) do
+			pcall(function() obj:Destroy() end)
+		end
+		if found then
+			local n = normalizeTextureId(found)
+			if n then return n end
+		end
+	end
+
+	-- 2) fallback: download the decal file and look for the image id inside it
+	local body = httpGetText("https://assetdelivery.roblox.com/v1/asset/?id=" .. idStr)
+	if type(body) == "string" then
+		for tid in string.gmatch(body, "[%?&][iI][dD]=(%d+)") do
+			if tid ~= idStr then
+				return "rbxassetid://" .. tid
+			end
+		end
+		for tid in string.gmatch(body, "rbxassetid://(%d+)") do
+			if tid ~= idStr then
+				return "rbxassetid://" .. tid
+			end
+		end
+	end
+
+	return nil
+end
+
+Mkt.clearInfo = function()
+	for _, v in ipairs(Mkt.InfoScroll:GetChildren()) do
+		if v ~= Mkt.InfoLayout then
+			v:Destroy()
+		end
+	end
+	Mkt.TexSetter = nil
+	Mkt.PreviewImg = nil
+	Mkt.FlipCtl = nil
+end
+
+Mkt.resetInfo = function()
+	Mkt.Selected = nil
+	Mkt.clearInfo()
+	Mkt.InfoTitle.Text = "Select a decal"
+end
+
+Mkt.highlight = function()
+	for id, row in pairs(Mkt.Rows) do
+		if row and row.Parent then
+			local target = (id == Mkt.Selected) and C.rowSelect or C.row
+			Anim.tween(row, 0.18, { BackgroundColor3 = target })
+		end
+	end
+end
+
+-- One info line (name left, value right). Click it to copy the value.
+-- Returns the row and a setter: setValue(text, copyable)
+Mkt.infoRow = function(name, value, order, sample)
+	local current = tostring(value)
+	local copyable = true
+	local s = uiScale
+	local textSz = math.max(9, math.floor(11 * s + 0.5))
+	local labelW = math.max(58, math.floor(78 * s + 0.5))
+	local gap = math.max(4, math.floor(8 * s + 0.5))
+	local absW = Mkt.InfoScroll.AbsoluteSize.X
+	if absW < 40 then absW = math.max(120, currentW * 0.4) end
+	local valueWidth = math.max(50, absW - labelW - gap - 12)
+	local h = measureTextHeight(current, textSz, Enum.Font.Arcade, valueWidth)
+	if sample then
+		h = math.max(h, measureTextHeight(sample, textSz, Enum.Font.Arcade, valueWidth))
+	end
+	local rowH = math.max(math.floor(24 * s), math.ceil(h) + math.floor(12 * s))
+
+	local row = Instance.new("TextButton")
+	row.AutoButtonColor = false
+	row.Text = ""
+	row.Size = UDim2.new(1, -2, 0, rowH)
+	row.BackgroundColor3 = C.surface2
+	row.BorderSizePixel = 0
+	row.ClipsDescendants = true
+	row.LayoutOrder = order or 2
+	row.Parent = Mkt.InfoScroll
+	Instance.new("UICorner", row).CornerRadius = UDim.new(0, 0)
+	Metal.panel(row, "raised", 0.35)
+
+	local left = Instance.new("TextLabel")
+	left.Size = UDim2.fromOffset(labelW, rowH)
+	left.Position = UDim2.fromOffset(6, 0)
+	left.BackgroundTransparency = 1
+	left.Text = name
+	left.TextColor3 = C.textMuted
+	left.Font = Enum.Font.Arcade
+	left.TextSize = textSz
+	left.TextXAlignment = Enum.TextXAlignment.Left
+	left.TextYAlignment = Enum.TextYAlignment.Top
+	left.TextTruncate = Enum.TextTruncate.AtEnd
+	left.Parent = row
+
+	local right = Instance.new("TextLabel")
+	right.Size = UDim2.new(1, -(labelW + gap + 4), 1, -8)
+	right.Position = UDim2.fromOffset(labelW + gap, 4)
+	right.BackgroundTransparency = 1
+	right.Text = current
+	right.TextColor3 = C.accent
+	right.Font = Enum.Font.Arcade
+	right.TextSize = textSz
+	right.TextWrapped = true
+	right.TextXAlignment = Enum.TextXAlignment.Left
+	right.TextYAlignment = Enum.TextYAlignment.Top
+	right.Parent = row
+
+	local function setValue(text, canCopy)
+		current = tostring(text)
+		copyable = canCopy ~= false
+		if right and right.Parent then
+			right.Text = current
+			right.TextColor3 = copyable and C.accent or C.textMuted
+		end
+	end
+
+	row.MouseButton1Click:Connect(function()
+		if not copyable then return end
+		local shown = current
+		local ok = copyToClipboard(shown)
+		right.Text = ok and "Copied!" or "Copy failed"
+		right.TextColor3 = ok and C.green or C.red
+		task.delay(0.9, function()
+			if right and right.Parent and current == shown then
+				right.Text = current
+				right.TextColor3 = copyable and C.accent or C.textMuted
+			end
+		end)
+	end)
+	row.MouseEnter:Connect(function()
+		Anim.tween(row, 0.12, { BackgroundColor3 = C.rowHover })
+	end)
+	row.MouseLeave:Connect(function()
+		Anim.tween(row, 0.18, { BackgroundColor3 = C.surface2 })
+	end)
+
+	return row, setValue
+end
+
+local MKT_TEXTURE_FAIL = "Could not get it (decal may be archived or blocked)"
+
+Mkt.showInfo = function(id)
+	local item = Mkt.ItemById[id]
+	if not item then return end
+	Mkt.Selected = id
+	Mkt.InfoTitle.Text = (item.Name ~= "") and item.Name or ("Decal " .. tostring(id))
+	Mkt.clearInfo()
+
+	local w = Mkt.InfoScroll.AbsoluteSize.X
+	if w < 40 then w = 190 end
+	local previewH = math.clamp(w - 2, 90, 220)
+
+	local preview = Instance.new("Frame")
+	preview.Size = UDim2.new(1, -2, 0, previewH)
+	preview.BackgroundColor3 = Color3.fromRGB(10, 10, 14)
+	preview.BorderSizePixel = 0
+	preview.LayoutOrder = 1
+	preview.Parent = Mkt.InfoScroll
+	Instance.new("UICorner", preview).CornerRadius = UDim.new(0, 0)
+
+	-- Market previews are always static (no flipbook animation)
+	local previewImg = Instance.new("ImageLabel")
+	previewImg.Name = "MktPreviewImage"
+	previewImg.AnchorPoint = Vector2.new(0.5, 0.5)
+	previewImg.Position = UDim2.fromScale(0.5, 0.5)
+	previewImg.Size = UDim2.new(1, -10, 1, -10)
+	previewImg.BackgroundTransparency = 1
+	previewImg.BorderSizePixel = 0
+	previewImg.ScaleType = Enum.ScaleType.Fit
+	previewImg.Image = Mkt.thumb(id, 420)
+	previewImg.Parent = preview
+	Mkt.PreviewImg = previewImg
+
+	local cached = Mkt.Resolved[id]
+	if type(cached) == "string" then
+		previewImg.Image = cached
+	end
+	local startText = "Looking it up..."
+	local startCopyable = false
+	if type(cached) == "string" then
+		startText = cached
+		startCopyable = true
+	elseif cached == false then
+		startText = MKT_TEXTURE_FAIL
+	end
+
+	local _, setTexture = Mkt.infoRow("TEXTURE ID", startText, 2, "rbxassetid://00000000000000")
+	setTexture(startText, startCopyable)
+	Mkt.TexSetter = setTexture
+
+	Mkt.infoRow("DECAL ID", tostring(id), 3)
+	if item.Creator ~= "" then
+		Mkt.infoRow("CREATOR", item.Creator, 4)
+	end
+
+	Mkt.highlight()
+
+	if cached == nil and not Mkt.Resolving[id] then
+		Mkt.Resolving[id] = true
+		task.spawn(function()
+			local okRun, tex = pcall(Mkt.resolveTexture, id)
+			if not okRun then tex = nil end
+			Mkt.Resolved[id] = tex or false
+			Mkt.Resolving[id] = nil
+			if Mkt.Selected == id and Mkt.TexSetter then
+				if tex then
+					Mkt.TexSetter(tex, true)
+					if Mkt.PreviewImg and Mkt.PreviewImg.Parent then
+						Mkt.PreviewImg.Image = tex
+					end
+				else
+					Mkt.TexSetter(MKT_TEXTURE_FAIL, false)
+				end
+			end
+		end)
+	end
+end
+
+Mkt.render = function(keepScroll)
+	local savedPos = Mkt.List.CanvasPosition
+	for _, v in ipairs(Mkt.List:GetChildren()) do
+		if v:IsA("GuiObject") then
+			v:Destroy()
+		end
+	end
+	table.clear(Mkt.Rows)
+
+	local total = #Mkt.Items
+
+	if total == 0 then
+		local empty = Instance.new("TextLabel")
+		empty.Name = "EmptyState"
+		empty.Size = UDim2.new(1, -12, 0, 70)
+		empty.BackgroundTransparency = 1
+		empty.Text = Mkt.Status
+		empty.TextColor3 = C.textMuted
+		empty.Font = Enum.Font.Arcade
+		empty.TextSize = 11
+		empty.TextWrapped = true
+		empty.Parent = Mkt.List
+		return
+	end
+
+	local s = uiScale
+	local rh = math.max(28, math.floor(40 * s + 0.5))
+	local iconSz = math.max(18, math.floor(28 * s + 0.5))
+	local iconPad = math.max(4, math.floor(6 * s + 0.5))
+	local textSz = math.max(8, math.floor(10 * s + 0.5))
+
+	for n = 1, total do
+		local item = Mkt.Items[n]
+		local id = item.Id
+
+		local row = Instance.new("TextButton")
+		row.Size = UDim2.new(1, -2, 0, rh)
+		row.BackgroundColor3 = (id == Mkt.Selected) and C.rowSelect or C.row
+		row.BorderSizePixel = 0
+		row.Text = ""
+		row.AutoButtonColor = false
+		row.LayoutOrder = n
+		row.Parent = Mkt.List
+		Instance.new("UICorner", row).CornerRadius = UDim.new(0, 0)
+		Metal.panel(row, "raised", 0.4)
+		Anim.button(row, { color = C.accent, hoverTransparency = 0.45 })
+
+		local icon = Instance.new("Frame")
+		icon.Size = UDim2.fromOffset(iconSz, iconSz)
+		icon.Position = UDim2.fromOffset(iconPad, math.floor((rh - iconSz) / 2))
+		icon.BackgroundColor3 = Color3.fromRGB(10, 10, 14)
+		icon.BorderSizePixel = 0
+		icon.Parent = row
+		Instance.new("UICorner", icon).CornerRadius = UDim.new(0, 0)
+
+		local img = Instance.new("ImageLabel")
+		img.Size = UDim2.new(1, -2, 1, -2)
+		img.Position = UDim2.fromOffset(1, 1)
+		img.BackgroundTransparency = 1
+		img.Image = Mkt.thumb(id, 150)
+		img.ScaleType = Enum.ScaleType.Fit
+		img.Parent = icon
+
+		local textLeft = iconPad + iconSz + 6
+		local label = Instance.new("TextLabel")
+		label.Size = UDim2.new(1, -(textLeft + 6), 0, math.floor(rh * 0.45))
+		label.Position = UDim2.fromOffset(textLeft, math.floor(rh * 0.08))
+		label.BackgroundTransparency = 1
+		label.Text = (item.Name ~= "") and item.Name or "Decal"
+		label.TextColor3 = C.text
+		label.Font = Enum.Font.Arcade
+		label.TextSize = textSz
+		label.TextXAlignment = Enum.TextXAlignment.Left
+		label.TextTruncate = Enum.TextTruncate.AtEnd
+		label.Parent = row
+
+		local idLabel = Instance.new("TextLabel")
+		idLabel.Size = UDim2.new(1, -(textLeft + 6), 0, math.floor(rh * 0.4))
+		idLabel.Position = UDim2.fromOffset(textLeft, math.floor(rh * 0.52))
+		idLabel.BackgroundTransparency = 1
+		idLabel.Text = "decal " .. tostring(id)
+		idLabel.TextColor3 = C.textMuted
+		idLabel.Font = Enum.Font.Arcade
+		idLabel.TextSize = math.max(7, textSz - 2)
+		idLabel.TextXAlignment = Enum.TextXAlignment.Left
+		idLabel.TextTruncate = Enum.TextTruncate.AtEnd
+		idLabel.Parent = row
+
+		Mkt.Rows[id] = row
+
+		row.MouseButton1Click:Connect(function()
+			Mkt.showInfo(id)
+		end)
+	end
+
+	-- footer: loading text or LOAD MORE button
+	if Mkt.Loading then
+		local loadingLabel = Instance.new("TextLabel")
+		loadingLabel.Name = "LoadingLabel"
+		loadingLabel.Size = UDim2.new(1, -2, 0, 30)
+		loadingLabel.BackgroundTransparency = 1
+		loadingLabel.LayoutOrder = total + 1
+		loadingLabel.Text = "Loading..."
+		loadingLabel.TextColor3 = C.textMuted
+		loadingLabel.Font = Enum.Font.Arcade
+		loadingLabel.TextSize = 10
+		loadingLabel.Parent = Mkt.List
+	elseif Mkt.HasMore and total < Mkt.MaxItems then
+		local moreBtn = Instance.new("TextButton")
+		moreBtn.Name = "MoreBtn"
+		moreBtn.Size = UDim2.new(1, -2, 0, 30)
+		moreBtn.BackgroundColor3 = C.surface3
+		moreBtn.BorderSizePixel = 0
+		moreBtn.LayoutOrder = total + 1
+		moreBtn.Text = "LOAD MORE"
+		moreBtn.TextColor3 = C.text
+		moreBtn.Font = Enum.Font.Arcade
+		moreBtn.TextSize = 10
+		moreBtn.AutoButtonColor = false
+		moreBtn.Parent = Mkt.List
+		Instance.new("UICorner", moreBtn).CornerRadius = UDim.new(0, 0)
+		Metal.gloss(moreBtn, 6)
+		Anim.button(moreBtn)
+		moreBtn.MouseButton1Click:Connect(function()
+			Mkt.fetch(false)
+		end)
+	end
+
+	if keepScroll then
+		task.delay(0.05, function()
+			if Mkt.List and Mkt.List.Parent then
+				Mkt.List.CanvasPosition = savedPos
+			end
+		end)
+	end
+end
+
+-- Gets names / creators for the decals that were just found (best effort, never required)
+Mkt.fillDetails = function(newItems)
+	local ids = {}
+	local byId = {}
+	for _, it in ipairs(newItems) do
+		ids[#ids + 1] = tostring(it.Id)
+		byId[it.Id] = it
+	end
+	if #ids == 0 then return end
+	local body = httpGetText("https://apis.roblox.com/toolbox-service/v1/items/details?assetIds=" .. table.concat(ids, "%2C"))
+	if not body then return end
+	local data = decode(body)
+	if type(data) ~= "table" or type(data.data) ~= "table" then return end
+	for _, d in ipairs(data.data) do
+		if type(d) == "table" then
+			local a = type(d.asset) == "table" and d.asset or {}
+			local c = type(d.creator) == "table" and d.creator or {}
+			local it = byId[tonumber(a.id)]
+			if it then
+				if type(a.name) == "string" and a.name ~= "" then
+					it.Name = a.name
+				end
+				if type(c.name) == "string" then
+					it.Creator = c.name
+				end
+			end
+		end
+	end
+end
+
+-- reset = true  -> brand new search from page 1
+-- reset = false -> load the next page of the current search
+Mkt.fetch = function(reset)
+	if Mkt.Loading and not reset then return end
+
+	if reset then
+		local kw = tostring(Mkt.Search.Text or "")
+		kw = (kw:gsub("^%s+", ""))
+		kw = (kw:gsub("%s+$", ""))
+		Mkt.Keyword = kw
+		Mkt.Page = 0
+		Mkt.Items = {}
+		Mkt.ItemById = {}
+		Mkt.HasMore = false
+		Mkt.resetInfo()
+		Mkt.Status = "Searching..."
+	end
+
+	Mkt.Token += 1
+	local token = Mkt.Token
+	Mkt.Loading = true
+	Mkt.render(not reset)
+
+	task.spawn(function()
+		local url = "https://apis.roblox.com/toolbox-service/v1/marketplace/13?limit=" .. tostring(Mkt.PageSize)
+			.. "&pageNumber=" .. tostring(Mkt.Page)
+		if Mkt.Keyword ~= "" then
+			url = url .. "&keyword=" .. HttpService:UrlEncode(Mkt.Keyword)
+		end
+
+		local body, code = httpGetText(url)
+		if token ~= Mkt.Token then return end
+
+		local data = body and decode(body) or nil
+		if type(data) ~= "table" or type(data.data) ~= "table" then
+			Mkt.Loading = false
+			if code == 429 then
+				Mkt.Status = "Roblox says too many requests.\nWait a few seconds and try again."
+			else
+				Mkt.Status = "Could not reach the Creator Store.\nYour executor may block web requests."
+			end
+			Mkt.render(not reset)
+			return
+		end
+
+		local newItems = {}
+		for _, d in ipairs(data.data) do
+			local id = nil
+			local name = ""
+			if type(d) == "table" then
+				id = tonumber(d.id)
+				if type(d.name) == "string" then name = d.name end
+			else
+				id = tonumber(d)
+			end
+			if id and not Mkt.ItemById[id] and #Mkt.Items < Mkt.MaxItems then
+				local item = { Id = id, Name = name, Creator = "" }
+				Mkt.Items[#Mkt.Items + 1] = item
+				Mkt.ItemById[id] = item
+				newItems[#newItems + 1] = item
+			end
+		end
+
+		Mkt.HasMore = (#data.data >= Mkt.PageSize) and (#newItems > 0)
+		Mkt.Page += 1
+		if #Mkt.Items == 0 then
+			Mkt.Status = "No decals found.\nTry a different word."
+		end
+
+		-- show the thumbnails right away, names fill in a moment later
+		Mkt.Loading = false
+		Mkt.render(not reset)
+
+		local okDet = pcall(Mkt.fillDetails, newItems)
+		if okDet and token == Mkt.Token then
+			Mkt.render(true)
+			if Mkt.Selected and Mkt.ItemById[Mkt.Selected] then
+				local sel = Mkt.ItemById[Mkt.Selected]
+				if sel.Name ~= "" then
+					Mkt.InfoTitle.Text = sel.Name
+				end
+			end
+		end
+	end)
+end
+
+Mkt.onOpen = function()
+	if not Mkt.Opened then
+		Mkt.Opened = true
+		Mkt.fetch(true)
+	else
+		Mkt.render(true)
+	end
+end
+
+Mkt.SearchBtn.MouseButton1Click:Connect(function()
+	Mkt.fetch(true)
+end)
+
+Mkt.Search.FocusLost:Connect(function(enterPressed)
+	if enterPressed then
+		Mkt.fetch(true)
+	end
+end)
+
+Mkt.CopyBtn.MouseButton1Click:Connect(function()
+	local id = Mkt.Selected
+	if not id then return end
+	local tex = Mkt.Resolved[id]
+	if type(tex) ~= "string" then
+		Mkt.flash(Mkt.CopyBtn, "WAIT", C.orange, "COPY", C.greenDark)
+		return
+	end
+	local ok = copyToClipboard(tex)
+	if ok then
+		Mkt.flash(Mkt.CopyBtn, "COPIED", C.green, "COPY", C.greenDark)
+	else
+		Mkt.flash(Mkt.CopyBtn, "FAILED", C.red, "COPY", C.greenDark)
+	end
+end)
+
+Mkt.SaveBtn.MouseButton1Click:Connect(function()
+	local id = Mkt.Selected
+	if not id then return end
+	local item = Mkt.ItemById[id]
+	local tex = Mkt.Resolved[id]
+	if not item or type(tex) ~= "string" then
+		Mkt.flash(Mkt.SaveBtn, "WAIT", C.orange, "SAVE", C.accent)
+		return
+	end
+
+	loadLibraryFromDisk()
+	local kw = "popular"
+	if Mkt.Keyword ~= "" then
+		kw = (Mkt.Keyword:gsub("%.", " "))
+	end
+	local added = addTextureToLibrary(tex, item.Name, "Marketplace." .. kw, Flip.Manual[tex])
+	local ok, err = saveLibraryToDisk()
+
+	if not ok then
+		warn("[ParticleInspector] Market save failed:", err)
+		Mkt.flash(Mkt.SaveBtn, "FAILED", C.red, "SAVE", C.accent)
+	elseif added then
+		Mkt.flash(Mkt.SaveBtn, "SAVED", C.green, "SAVE", C.accent)
+	else
+		Mkt.flash(Mkt.SaveBtn, "HAVE IT", C.surface3, "SAVE", C.accent)
+	end
+
+	if SavedPage.Visible and refreshSavedGames then
+		refreshSavedGames()
+	end
+end)
+
+
+end
+
+local tabPositions = { 0, 0.2, 0.4, 0.6, 0.8 }
+
+-- One place that stops every running page slide and puts every page exactly where
+-- the layout says it belongs.
+local function snapPages()
+	for page, tw in pairs(PageTweens) do
+		pcall(function() tw:Cancel() end)
+		PageTweens[page] = nil
+	end
+	for _, pg in ipairs({ ParticlePage, AutoPage, FavPage, SavedPage, Metal.Mkt.PageFrame }) do
+		pg.Position = UDim2.fromOffset(0, pageTopValue)
+	end
+end
+
+-- instant = true  -> no slide animation (used by info-only mode and un-minimize,
+--                    where the whole window is being rebuilt anyway)
+setPage = function(pageIndex, instant)
+	local prevPage = currentPage
+	currentPage = pageIndex
+
+	-- always start from clean, correct positions
+	snapPages()
+
+	ParticlePage.Visible = (pageIndex == 1)
+	AutoPage.Visible = (pageIndex == 2)
+	FavPage.Visible = (pageIndex == 3)
+	SavedPage.Visible = (pageIndex == 4)
+	Metal.Mkt.PageFrame.Visible = (pageIndex == 5)
+
+	-- tab text colours + sliding highlight
+	local tabs = { ParticlePageButton, AutoPageButton, FavPageButton, SavedPageButton, Metal.Mkt.TabButton }
+	for i, tab in ipairs(tabs) do
+		if instant then
+			tab.TextColor3 = (i == pageIndex) and C.text or C.tabIdle
+		else
+			Anim.tween(tab, 0.22, { TextColor3 = (i == pageIndex) and C.text or C.tabIdle })
+		end
+	end
+	local indicatorPos = UDim2.new(tabPositions[pageIndex] or 0, 1, 0, 2)
+	if instant then
+		TabIndicator.Position = indicatorPos
+	else
+		Anim.tween(TabIndicator, 0.32, { Position = indicatorPos }, Enum.EasingStyle.Quint)
+	end
+
+	-- page slides in from the side it came from (only on normal tab clicks, never in info-only mode)
+	if not instant and not infoOnly and prevPage ~= pageIndex then
+		local pages = { ParticlePage, AutoPage, FavPage, SavedPage, Metal.Mkt.PageFrame }
+		local page = pages[pageIndex]
+		if page then
+			local dir = (pageIndex > prevPage) and 1 or -1
+			page.Position = UDim2.fromOffset(22 * dir, pageTopValue)
+			PageTweens[page] = Anim.tween(page, 0.32, { Position = UDim2.fromOffset(0, pageTopValue) }, Enum.EasingStyle.Quint)
+		end
+	end
+
+	AnimateRender = not instant
+	if pageIndex == 2 then
+		renderAutoPage()
+	end
+	if pageIndex == 3 then
+		renderFavPage()
+	end
+	if pageIndex == 4 then
+		Lib.ShowLimit = Lib.Batch
+		refreshSavedGames()
+	end
+	if pageIndex == 5 then
+		Metal.Mkt.onOpen()
+	end
+	AnimateRender = false
+
+	if pageIndex == 1 then
+		updateRows()
+	end
+end
+
+ParticlePageButton.MouseButton1Click:Connect(function()
+	setPage(1)
+end)
+AutoPageButton.MouseButton1Click:Connect(function()
+	setPage(2)
+end)
+FavPageButton.MouseButton1Click:Connect(function()
+	setPage(3)
+end)
+SavedPageButton.MouseButton1Click:Connect(function()
+	setPage(4)
+end)
+Metal.Mkt.TabButton.MouseButton1Click:Connect(function()
+	setPage(5)
+end)
+
+-- Tab hover: idle tabs brighten a little
+do
+	local tabs = { ParticlePageButton, AutoPageButton, FavPageButton, SavedPageButton, Metal.Mkt.TabButton }
+	for i, tab in ipairs(tabs) do
+		tab.MouseEnter:Connect(function()
+			if currentPage ~= i then
+				Anim.tween(tab, 0.15, { TextColor3 = C.textDim })
+			end
+		end)
+		tab.MouseLeave:Connect(function()
+			if currentPage ~= i then
+				Anim.tween(tab, 0.2, { TextColor3 = C.tabIdle })
+			end
+		end)
+	end
+end
+
+local WinFx = {} -- window helpers kept in one table (keeps the script under the 200-locals limit)
+
+-- ===================== LAYOUT HELPERS =====================
+-- The window uses normal Scale + Offset sizing, so dragging the corner only changes the window
+-- size and the engine moves everything else by itself. The "look step" (text size / row height)
+-- only changes in coarse steps, and only then is the layout re-applied.
+
+WinFx.LayoutC = { topH = 40, pad = 8, searchH = 24, pageTop = 44 }
+
+function WinFx.desiredScale(w, h)
+	local refW, refH = 460, 340
+	if infoOnly then
+		refW, refH = InfoMode.refW, InfoMode.refH
+	end
+	local raw = math.clamp(math.min(w / refW, h / refH), 0.65, 1.4)
+	-- small hysteresis so hovering near a step edge does not flip back and forth
+	if math.abs(raw - uiScale) <= 0.07 then
+		return uiScale
+	end
+	return math.floor(raw * 10 + 0.5) / 10
+end
+
+-- Height of the list / info area for the current window size (same numbers the layout uses)
+function WinFx.currentContentH()
+	local bodyH = currentH - WinFx.LayoutC.topH
+	if infoOnly then
+		return math.max(50, bodyH - WinFx.LayoutC.pad * 2)
+	end
+	return math.max(50, bodyH - WinFx.LayoutC.pageTop - WinFx.LayoutC.searchH - 6)
+end
+
+-- ===================== WINDOW LAYOUT =====================
+-- layoutParticlePage is the ONE function that decides where everything sits.
+-- It always sets every position and size from scratch, so it can be called at any time
+-- (resize, info-only on/off, un-minimize) and the result is always the same clean layout.
+
+layoutParticlePage = function(fullRebuild)
+	if minimized then return end
+
+	-- One look step for the whole window (changes only in coarse steps while resizing)
+	local scale = WinFx.desiredScale(currentW, currentH)
+	uiScale = scale
+	RowHeight = math.max(26, math.floor(40 * scale + 0.5))
+
+	local topH = math.max(28, math.floor(40 * scale + 0.5))
+	local pad = math.max(4, math.floor(8 * scale + 0.5))
+	local searchH = math.max(18, math.floor(24 * scale + 0.5))
+	local tabH = math.max(20, math.floor(32 * scale + 0.5))
+	local gap = math.max(4, math.floor(8 * scale + 0.5))
+	local btnGap = math.max(3, math.floor(5 * scale + 0.5))
+
+	local bw1 = math.max(36, math.floor(58 * scale + 0.5))
+	local bw2 = math.max(32, math.floor(52 * scale + 0.5))
+	local bw3 = math.max(32, math.floor(52 * scale + 0.5))
+	local btnStrip = bw1 + bw2 + bw3 + btnGap * 3
+
+	local pageTop = tabH + math.floor(12 * scale)
+	-- Info-only mode: the info panel takes the whole window
+	if infoOnly then
+		pageTop = pad
+	end
+	local showBrowser = not infoOnly
+	pageTopValue = pageTop
+	WinFx.LayoutC.topH = topH
+	WinFx.LayoutC.pad = pad
+	WinFx.LayoutC.searchH = searchH
+	WinFx.LayoutC.pageTop = pageTop
+	ListViewH = WinFx.currentContentH()
+
+	-- List / info split (48% / 52%) written as Scale + Offset, so it follows the window by itself
+	local splitOff = -math.floor((pad * 2 + gap) * 0.48 + 0.5)
+	local infoOff = -(pad * 2 + gap) - splitOff
+	local listSize = UDim2.new(0.48, splitOff, 1, -(searchH + 6))
+	local listPos = UDim2.fromOffset(pad, searchH + 4)
+	local infoSize = UDim2.new(0.52, infoOff, 1, -(searchH + 6))
+	local infoPos = UDim2.new(0.48, splitOff + pad + gap, 0, searchH + 4)
+
+	local searchTextSize = math.max(8, math.floor(11 * scale + 0.5))
+	local btnTextSize = math.max(8, math.floor(10 * scale + 0.5))
+	local tabTextSize = math.max(7, math.floor(10 * scale + 0.5))
+
+	-- Title bar
+	Top.Size = UDim2.new(1, 0, 0, topH)
+	TopFix.Size = UDim2.new(1, 0, 0, math.floor(topH / 2))
+	TopFix.Position = UDim2.new(0, 0, 1, -math.floor(topH / 2))
+	Body.Visible = true
+	Body.Size = UDim2.new(1, 0, 1, -topH)
+	Body.Position = UDim2.fromOffset(0, topH)
+	TitleIcon.Size = UDim2.fromOffset(math.max(14, math.floor(22 * scale)), topH)
+	TitleIcon.Position = UDim2.fromOffset(math.floor(10 * scale), 0)
+	TitleIcon.TextSize = math.max(11, math.floor(16 * scale + 0.5))
+	Title.Size = UDim2.new(1, -math.floor((infoOnly and 124 or 230) * scale), 1, 0)
+	Title.Position = UDim2.fromOffset(math.floor(30 * scale), 0)
+	Title.TextSize = math.max(10, math.floor(14 * scale + 0.5))
+	Status.Visible = not infoOnly
+	Status.Size = UDim2.fromOffset(math.floor(70 * scale), topH)
+	Status.Position = UDim2.new(1, -math.floor(196 * scale), 0, 0)
+	Status.TextSize = math.max(8, math.floor(11 * scale + 0.5))
+	FlipAnimBtn.Visible = true
+	FlipAnimBtn.Size = UDim2.fromOffset(math.floor(30 * scale), topH)
+	FlipAnimBtn.Position = UDim2.new(1, -math.floor(124 * scale), 0, 0)
+	InfoBtn.Visible = true
+	InfoBtn.Size = UDim2.fromOffset(math.floor(30 * scale), topH)
+	InfoBtn.Position = UDim2.new(1, -math.floor(94 * scale), 0, 0)
+	InfoBtn.TextSize = math.max(10, math.floor(14 * scale + 0.5))
+	Min.Text = "—"
+	Min.Size = UDim2.fromOffset(math.floor(30 * scale), topH)
+	Min.Position = UDim2.new(1, -math.floor(62 * scale), 0, 0)
+	Min.TextSize = math.max(11, math.floor(14 * scale + 0.5))
+	Close.Size = UDim2.fromOffset(math.floor(30 * scale), topH)
+	Close.Position = UDim2.new(1, -math.floor(30 * scale), 0, 0)
+	Close.TextSize = math.max(12, math.floor(18 * scale + 0.5))
+
+	-- Tabs
+	PageButtons.Visible = showBrowser
+	PageButtons.Size = UDim2.new(1, -pad * 2, 0, tabH)
+	PageButtons.Position = UDim2.fromOffset(pad, math.floor(6 * scale))
+	ParticlePageButton.TextSize = tabTextSize
+	AutoPageButton.TextSize = tabTextSize
+	FavPageButton.TextSize = tabTextSize
+	SavedPageButton.TextSize = tabTextSize
+	Metal.Mkt.TabButton.TextSize = tabTextSize
+	for _, tb in ipairs({ ParticlePageButton, AutoPageButton, FavPageButton, SavedPageButton, Metal.Mkt.TabButton }) do
+		local lim = tb:FindFirstChildOfClass("UITextSizeConstraint")
+		if lim then lim.MaxTextSize = tabTextSize end
+	end
+
+	-- Pages under tabs (any running slide animation is stopped first so it cannot undo this)
+	for page, tw in pairs(PageTweens) do
+		pcall(function() tw:Cancel() end)
+		PageTweens[page] = nil
+	end
+	for _, pg in ipairs({ ParticlePage, AutoPage, FavPage, SavedPage, Metal.Mkt.PageFrame }) do
+		pg.Size = UDim2.new(1, 0, 1, -pageTop)
+		pg.Position = UDim2.fromOffset(0, pageTop)
+	end
+
+	-- Search bar + buttons (left-to-right absolute layout — always matches window width)
+	SearchBar.Visible = showBrowser
+	SearchBar.Size = UDim2.new(1, -pad * 2, 0, searchH)
+	SearchBar.Position = UDim2.fromOffset(pad, 0)
+	Search.Size = UDim2.new(1, -btnStrip, 0, searchH)
+	Search.Position = UDim2.fromOffset(0, 0)
+	Search.TextSize = searchTextSize
+
+	Refresh.Size = UDim2.fromOffset(bw1, searchH)
+	Refresh.Position = UDim2.new(1, -btnStrip + btnGap, 0, 0)
+	Refresh.TextSize = btnTextSize
+	ClearBtn.Size = UDim2.fromOffset(bw2, searchH)
+	ClearBtn.Position = UDim2.new(1, -btnStrip + btnGap + bw1 + btnGap, 0, 0)
+	ClearBtn.TextSize = btnTextSize
+	Save.Size = UDim2.fromOffset(bw3, searchH)
+	Save.Position = UDim2.new(1, -btnStrip + btnGap + bw1 + btnGap + bw2 + btnGap, 0, 0)
+	Save.TextSize = btnTextSize
+
+	List.Visible = showBrowser
+	Info.Visible = not (infoOnly and InfoMode.prevPage == 4)
+	List.Size = listSize
+	List.Position = listPos
+	if infoOnly then
+		Info.Size = UDim2.new(1, -pad * 2, 1, -pad)
+		Info.Position = UDim2.fromOffset(pad, 0)
+	else
+		Info.Size = infoSize
+		Info.Position = infoPos
+	end
+
+	local headerBtnH = math.max(18, math.floor(26 * scale))
+	local headerGap = math.max(4, math.floor(6 * scale))
+
+	InfoTitle.TextSize = math.max(9, math.floor(13 * scale + 0.5))
+	InfoTitle.Size = UDim2.new(1, -math.floor(130 * scale), 0, math.max(20, math.floor(28 * scale)))
+	InfoTitle.Position = UDim2.fromOffset(10, math.floor(4 * scale))
+	local favW = math.max(26, math.floor(36 * scale))
+	local prevW = math.max(50, math.floor(74 * scale))
+	FavButton.Size = UDim2.fromOffset(favW, headerBtnH)
+	PreviewButton.Size = UDim2.fromOffset(prevW, headerBtnH)
+	PreviewButton.Position = UDim2.new(1, -(prevW + headerGap), 0, math.floor(4 * scale))
+	FavButton.Position = UDim2.new(1, -(prevW + headerGap + favW + headerGap), 0, math.floor(4 * scale))
+	FavButton.TextSize = math.max(9, math.floor(13 * scale + 0.5))
+	PreviewButton.TextSize = math.max(7, math.floor(10 * scale + 0.5))
+	InfoScroll.Position = UDim2.fromOffset(6, math.max(26, math.floor(34 * scale)))
+	InfoScroll.Size = UDim2.new(1, -12, 1, -math.max(28, math.floor(38 * scale)))
+
+	-- Header rows on the other pages: buttons are anchored from the right edge using their
+	-- real (scaled) widths, so they can never overlap each other or the title.
+	local headerH = math.max(22, math.floor(28 * scale))
+	local headerTextSize = math.max(8, math.floor(11 * scale + 0.5))
+	local btnY = math.max(0, math.floor((headerH - headerBtnH) / 2))
+	local clearW = math.max(40, math.floor(58 * scale))
+	local toggleW = math.max(72, math.floor(108 * scale))
+	local refreshW = math.max(48, math.floor(70 * scale))
+	local btnSmallText = math.max(7, math.floor(9 * scale + 0.5))
+
+	AutoTitle.TextSize = headerTextSize
+	AutoTitle.Position = UDim2.fromOffset(pad + 4, 0)
+	local autoSaveW = math.max(40, math.floor(58 * scale))
+	AutoTitle.Size = UDim2.new(1, -(pad + 4 + toggleW + clearW + autoSaveW + headerGap * 4 + pad), 0, headerH)
+	AutoToggleBtn.Size = UDim2.fromOffset(toggleW, headerBtnH)
+	AutoToggleBtn.Position = UDim2.new(1, -(toggleW + pad), 0, btnY)
+	AutoToggleBtn.TextSize = btnSmallText
+	AutoClearBtn.Size = UDim2.fromOffset(clearW, headerBtnH)
+	AutoClearBtn.Position = UDim2.new(1, -(toggleW + pad + headerGap + clearW), 0, btnY)
+	AutoClearBtn.TextSize = btnSmallText
+	Lib.AutoSave.Size = UDim2.fromOffset(autoSaveW, headerBtnH)
+	Lib.AutoSave.Position = UDim2.new(1, -(toggleW + pad + headerGap + clearW + headerGap + autoSaveW), 0, btnY)
+	Lib.AutoSave.TextSize = btnSmallText
+
+	FavHeader.TextSize = headerTextSize
+	FavHeader.Position = UDim2.fromOffset(pad + 4, 0)
+	FavHeader.Size = UDim2.new(1, -(pad + 4 + refreshW + headerGap * 2 + pad), 0, headerH)
+	FavRefresh.Size = UDim2.fromOffset(refreshW, headerBtnH)
+	FavRefresh.Position = UDim2.new(1, -(refreshW + pad), 0, btnY)
+	FavRefresh.TextSize = btnSmallText
+
+	-- Library page (same layout as the particles page)
+	do
+		local libBtnW = math.max(48, math.floor(70 * scale))
+		Lib.SearchBar.Size = UDim2.new(1, -pad * 2, 0, searchH)
+		Lib.SearchBar.Position = UDim2.fromOffset(pad, 0)
+		Lib.Search.Size = UDim2.new(1, -(libBtnW + btnGap), 0, searchH)
+		Lib.Search.Position = UDim2.fromOffset(0, 0)
+		Lib.Search.TextSize = searchTextSize
+		Lib.Refresh.Size = UDim2.fromOffset(libBtnW, searchH)
+		Lib.Refresh.Position = UDim2.new(1, -libBtnW, 0, 0)
+		Lib.Refresh.TextSize = btnTextSize
+
+		Lib.SearchBar.Visible = not (infoOnly and InfoMode.prevPage == 4)
+		Lib.List.Visible = not (infoOnly and InfoMode.prevPage == 4)
+		Lib.List.Size = listSize
+		Lib.List.Position = listPos
+		if infoOnly and InfoMode.prevPage == 4 then
+			Lib.Info.Size = UDim2.new(1, -pad * 2, 1, -pad)
+			Lib.Info.Position = UDim2.fromOffset(pad, 0)
+		else
+			Lib.Info.Size = infoSize
+			Lib.Info.Position = infoPos
+		end
+
+		local delW = math.max(30, math.floor(40 * scale))
+		local copyW = math.max(44, math.floor(52 * scale))
+		Lib.DelBtn.Size = UDim2.fromOffset(delW, headerBtnH)
+		Lib.DelBtn.Position = UDim2.new(1, -(delW + headerGap), 0, math.floor(4 * scale))
+		Lib.DelBtn.TextSize = math.max(7, math.floor(10 * scale + 0.5))
+		Lib.CopyBtn.Size = UDim2.fromOffset(copyW, headerBtnH)
+		Lib.CopyBtn.Position = UDim2.new(1, -(delW + headerGap + copyW + headerGap), 0, math.floor(4 * scale))
+		Lib.CopyBtn.TextSize = math.max(7, math.floor(10 * scale + 0.5))
+		Lib.InfoTitle.TextSize = math.max(9, math.floor(13 * scale + 0.5))
+		Lib.InfoTitle.Size = UDim2.new(1, -(delW + copyW + headerGap * 3 + 10), 0, math.max(20, math.floor(28 * scale)))
+		Lib.InfoTitle.Position = UDim2.fromOffset(10, math.floor(4 * scale))
+		Lib.InfoScroll.Position = UDim2.fromOffset(6, math.max(26, math.floor(34 * scale)))
+		Lib.InfoScroll.Size = UDim2.new(1, -12, 1, -math.max(28, math.floor(38 * scale)))
+	end
+
+	-- Market page (same layout as the library page)
+	do
+		local Mkt = Metal.Mkt
+		local mktBtnW = math.max(48, math.floor(70 * scale))
+		Mkt.SearchBar.Size = UDim2.new(1, -pad * 2, 0, searchH)
+		Mkt.SearchBar.Position = UDim2.fromOffset(pad, 0)
+		Mkt.Search.Size = UDim2.new(1, -(mktBtnW + btnGap), 0, searchH)
+		Mkt.Search.Position = UDim2.fromOffset(0, 0)
+		Mkt.Search.TextSize = searchTextSize
+		Mkt.SearchBtn.Size = UDim2.fromOffset(mktBtnW, searchH)
+		Mkt.SearchBtn.Position = UDim2.new(1, -mktBtnW, 0, 0)
+		Mkt.SearchBtn.TextSize = btnTextSize
+
+		Mkt.List.Size = listSize
+		Mkt.List.Position = listPos
+		Mkt.Info.Size = infoSize
+		Mkt.Info.Position = infoPos
+
+		local mSaveW = math.max(34, math.floor(48 * scale))
+		local mCopyW = math.max(44, math.floor(52 * scale))
+		Mkt.SaveBtn.Size = UDim2.fromOffset(mSaveW, headerBtnH)
+		Mkt.SaveBtn.Position = UDim2.new(1, -(mSaveW + headerGap), 0, math.floor(4 * scale))
+		Mkt.SaveBtn.TextSize = math.max(7, math.floor(10 * scale + 0.5))
+		Mkt.CopyBtn.Size = UDim2.fromOffset(mCopyW, headerBtnH)
+		Mkt.CopyBtn.Position = UDim2.new(1, -(mSaveW + headerGap + mCopyW + headerGap), 0, math.floor(4 * scale))
+		Mkt.CopyBtn.TextSize = math.max(7, math.floor(10 * scale + 0.5))
+		Mkt.InfoTitle.TextSize = math.max(9, math.floor(13 * scale + 0.5))
+		Mkt.InfoTitle.Size = UDim2.new(1, -(mSaveW + mCopyW + headerGap * 3 + 10), 0, math.max(20, math.floor(28 * scale)))
+		Mkt.InfoTitle.Position = UDim2.fromOffset(10, math.floor(4 * scale))
+		Mkt.InfoScroll.Position = UDim2.fromOffset(6, math.max(26, math.floor(34 * scale)))
+		Mkt.InfoScroll.Size = UDim2.new(1, -12, 1, -math.max(28, math.floor(38 * scale)))
+	end
+
+	local listTop = headerH + math.floor(6 * scale)
+	AutoList.Size = UDim2.new(1, -pad * 2, 1, -(listTop + pad))
+	AutoList.Position = UDim2.fromOffset(pad, listTop)
+	FavList.Size = UDim2.new(1, -pad * 2, 1, -(listTop + pad))
+	FavList.Position = UDim2.fromOffset(pad, listTop)
+
+	if ResizeHandle then
+		local rh = math.max(16, math.floor(24 * scale + 0.5))
+		ResizeHandle.Visible = true
+		ResizeHandle.Size = UDim2.fromOffset(rh, rh)
+		ResizeHandle.Position = UDim2.new(1, -rh, 1, -rh)
+		ResizeHandle.TextSize = math.max(8, math.floor(11 * scale + 0.5))
+	end
+
+end
+
+-- Resize handle (bottom-right corner) — mouse + touch
+ResizeHandle = Instance.new("TextButton")
+ResizeHandle.Name = "ResizeHandle"
+ResizeHandle.Size = UDim2.fromOffset(24, 24)
+ResizeHandle.Position = UDim2.new(1, -24, 1, -24)
+ResizeHandle.BackgroundColor3 = C.surface2
+ResizeHandle.BorderSizePixel = 0
+ResizeHandle.Text = "◢"
+ResizeHandle.TextColor3 = C.textMuted
+ResizeHandle.Font = Enum.Font.Arcade
+ResizeHandle.TextSize = 11
+ResizeHandle.ZIndex = 20
+ResizeHandle.AutoButtonColor = false
+ResizeHandle.Parent = Main
+Instance.new("UICorner", ResizeHandle).CornerRadius = UDim.new(0, 0)
+Metal.gloss(ResizeHandle, 4)
+Anim.button(ResizeHandle)
+
+local resizing = false
+local resizeStart = nil
+local resizeStartSize = nil
+WinFx.resizeConn = nil
+WinFx.pendingW, WinFx.pendingH = nil, nil
+local MainSizeTween = nil
+
+-- Remembers what the info panels / lists were last built for, so a resize only redoes what changed
+WinFx.PanelState = { w = 0, lists = false }
+WinFx.RebuildToken = 0
+
+function WinFx.refreshListCanvas()
+	local canvasH = math.min(math.max(#Filtered * RowHeight, ListViewH + 1), 5000000)
+	ListContent.Size = UDim2.new(1, -4, 0, canvasH)
+	List.CanvasSize = UDim2.fromOffset(0, canvasH)
+end
+
+-- Adds pooled rows if the list got taller (never destroys anything, so it is cheap)
+function WinFx.growRows()
+	local need = math.ceil(ListViewH / RowHeight) + Overscan * 2 + 4
+	local made = false
+	for i = #Rows + 1, need do
+		Rows[i] = createRow()
+		made = true
+	end
+	if made then
+		LastFirst = -1
+		LastLast = -1
+	end
+end
+
+-- Full rebuild of the particle list rows (only needed when the look step changes)
+function WinFx.rebuildMainList()
+	LastFirst = -1
+	LastLast = -1
+	if infoOnly then return end
+	WinFx.refreshListCanvas()
+	setupRows(ListViewH)
+	updateRows()
+end
+
+-- Re-measures the info panels (text wrapping depends on their width) and, when the look step
+-- changed, the library / market lists. Runs one piece per frame so it never causes a hitch.
+function WinFx.rebuildPanels(includeLists)
+	if includeLists then
+		WinFx.PanelState.lists = true
+	end
+	WinFx.RebuildToken += 1
+	local token = WinFx.RebuildToken
+	WinFx.PanelState.w = currentW
+	task.spawn(function()
+		task.wait() -- let the new window size settle so widths read correctly
+		if token ~= WinFx.RebuildToken or minimized then return end
+		local lists = WinFx.PanelState.lists
+
+		if Selected and isValidParticle(Selected) then
+			pcall(showInfo, Selected, true, true)
+		end
+		task.wait()
+		if token ~= WinFx.RebuildToken or minimized then return end
+
+		pcall(function()
+			local libPos = Lib.List.CanvasPosition
+			if lists then
+				Lib.render()
+			end
+			if Lib.Selected and LibrarySet[Lib.Selected] then
+				Lib.showInfo(Lib.Selected, true)
+			end
+			if lists then
+				Lib.List.CanvasPosition = libPos
+			end
+		end)
+		task.wait()
+		if token ~= WinFx.RebuildToken or minimized then return end
+
+		pcall(function()
+			local M = Metal.Mkt
+			if M.Opened then
+				if lists then
+					M.render(true)
+				end
+				if M.Selected and M.ItemById[M.Selected] then
+					M.showInfo(M.Selected)
+				end
+			end
+		end)
+		WinFx.PanelState.lists = false
+	end)
+end
+
+-- Cheap path used on every frame while dragging the corner: nothing is re-laid-out by script,
+-- only the virtual list learns how tall it is now.
+function WinFx.liveResize()
+	local newH = WinFx.currentContentH()
+	if newH == ListViewH then return end
+	ListViewH = newH
+	if infoOnly then return end
+	WinFx.refreshListCanvas()
+	WinFx.growRows()
+	updateRows()
+end
+
+function WinFx.flushResize()
+	if WinFx.pendingW then
+		local w, h = WinFx.pendingW, WinFx.pendingH
+		WinFx.pendingW, WinFx.pendingH = nil, nil
+		applyMainSize(w, h, false)
+	end
+end
+
+applyMainSize = function(w, h, fullRebuild)
+	if MainSizeTween then
+		MainSizeTween:Cancel()
+		MainSizeTween = nil
+	end
+	w = math.clamp(math.floor(w), MIN_W, MAX_W)
+	h = math.clamp(math.floor(h), MIN_H, MAX_H)
+	currentW = w
+	currentH = h
+	Main.Size = UDim2.fromOffset(w, h)
+	if minimized then return end
+
+	local stepChanged = WinFx.desiredScale(w, h) ~= uiScale
+	if fullRebuild == true then
+		layoutParticlePage()
+		WinFx.rebuildMainList()
+		WinFx.rebuildPanels(true)
+	elseif stepChanged then
+		-- text / row size step changed while dragging: redo the layout once, other pages catch up on release
+		layoutParticlePage()
+		WinFx.rebuildMainList()
+		WinFx.PanelState.lists = true
+	else
+		WinFx.liveResize()
+	end
+end
+
+-- Smoothly animates the window from a previous size to whatever it is now
+local function tweenMainSizeFrom(fromW, fromH)
+	local target = Main.Size
+	Main.Size = UDim2.fromOffset(fromW, fromH)
+	MainSizeTween = Anim.tween(Main, 0.32, { Size = target }, Enum.EasingStyle.Quint)
+end
+
+local function beginResize(input)
+	if minimized then return end
+	if MainSizeTween then
+		MainSizeTween:Cancel()
+		MainSizeTween = nil
+		Main.Size = UDim2.fromOffset(currentW, currentH)
+	end
+	resizing = true
+	resizeStart = input.Position
+	resizeStartSize = Vector2.new(currentW, currentH)
+	WinFx.pendingW, WinFx.pendingH = nil, nil
+	if WinFx.resizeConn then
+		WinFx.resizeConn:Disconnect()
+	end
+	-- At most one new size per frame, however fast the mouse reports movement
+	WinFx.resizeConn = RunService.RenderStepped:Connect(WinFx.flushResize)
+end
+
+local function endResize()
+	resizing = false
+	resizeStart = nil
+	resizeStartSize = nil
+	if WinFx.resizeConn then
+		WinFx.resizeConn:Disconnect()
+		WinFx.resizeConn = nil
+	end
+	WinFx.flushResize()
+	if minimized then return end
+	-- Only redo the info panels / lists if the width or the look step really changed
+	if WinFx.PanelState.lists or math.abs(currentW - WinFx.PanelState.w) >= 2 then
+		WinFx.rebuildPanels(false)
+	end
+end
+
+ResizeHandle.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		beginResize(input)
+	end
+end)
+
+ResizeHandle.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		endResize()
+	end
+end)
+
+-- ===================== MINIMIZE (small bar) =====================
+
+local savedW, savedH = currentW, currentH
+local MINIMIZED_W = 200
+local MINIMIZED_H = 28
+
+local function applyMinimizedBar()
+	Main.Size = UDim2.fromOffset(MINIMIZED_W, MINIMIZED_H)
+	Top.Size = UDim2.new(1, 0, 0, MINIMIZED_H)
+	TopFix.Size = UDim2.new(1, 0, 0, 14)
+	TopFix.Position = UDim2.new(0, 0, 1, -14)
+	TitleIcon.Size = UDim2.fromOffset(14, MINIMIZED_H)
+	TitleIcon.Position = UDim2.fromOffset(6, 0)
+	TitleIcon.TextSize = 11
+	Title.Size = UDim2.new(1, -68, 1, 0)
+	Title.Position = UDim2.fromOffset(20, 0)
+	Title.TextSize = 10
+	Status.Visible = false
+	FlipAnimBtn.Visible = false
+	InfoBtn.Visible = false
+	Min.Size = UDim2.fromOffset(26, MINIMIZED_H)
+	Min.Position = UDim2.new(1, -52, 0, 0)
+	Min.TextSize = 12
+	Min.Text = "+"
+	Close.Size = UDim2.fromOffset(26, MINIMIZED_H)
+	Close.Position = UDim2.new(1, -26, 0, 0)
+	Close.TextSize = 13
+	Body.Visible = false
+	if ResizeHandle then ResizeHandle.Visible = false end
+	PageButtons.Visible = false
+	SearchBar.Visible = false
+	List.Visible = false
+	Info.Visible = false
+	ParticlePage.Visible = false
+	AutoPage.Visible = false
+	FavPage.Visible = false
+	SavedPage.Visible = false
+	Metal.Mkt.PageFrame.Visible = false
+end
+
+Min.MouseButton1Click:Connect(function()
+	minimized = not minimized
+	if minimized then
+		savedW, savedH = currentW, currentH
+		if MainSizeTween then
+			MainSizeTween:Cancel()
+			MainSizeTween = nil
+		end
+		applyMinimizedBar()
+		-- window folds up into the small bar
+		tweenMainSizeFrom(savedW, savedH)
+	else
+		currentW = math.clamp(savedW, MIN_W, MAX_W)
+		currentH = math.clamp(savedH, MIN_H, MAX_H)
+		Main.Size = UDim2.fromOffset(currentW, currentH)
+		Body.Visible = true
+		Info.Visible = true
+		if ResizeHandle then ResizeHandle.Visible = true end
+		-- Lay everything out FIRST so pageTopValue and all sizes are correct,
+		-- THEN show the page (instantly, no slide), so nothing can end up out of place.
+		applyMainSize(currentW, currentH, true)
+		setPage(currentPage, true)
+		-- window unfolds from the small bar
+		tweenMainSizeFrom(MINIMIZED_W, MINIMIZED_H)
+	end
+end)
+
+-- ===================== INFO-ONLY MODE (second minimizer) =====================
+-- Hides the whole browser (tabs, search, list, other pages) and shows only the info panel.
+
+local function refreshInfoBtn()
+	local gloss = InfoBtn:FindFirstChild("MetalGloss")
+	if infoOnly then
+		Anim.tween(InfoBtn, 0.2, {
+			BackgroundTransparency = 0,
+			BackgroundColor3 = C.accent,
+			TextColor3 = Color3.new(1, 1, 1),
+		})
+		if gloss then gloss.Visible = true end
+	else
+		Anim.tween(InfoBtn, 0.2, {
+			BackgroundTransparency = 1,
+			TextColor3 = C.textMuted,
+		})
+		if gloss then gloss.Visible = false end
+	end
+end
+
+local function setInfoOnly(on)
+	if minimized then return end
+	if on == infoOnly then return end
+
+	local oldW, oldH = currentW, currentH
+	local pageToShow = 1
+
+	if on then
+		InfoMode.normalW, InfoMode.normalH = currentW, currentH
+		InfoMode.prevPage = currentPage
+		pageToShow = (currentPage == 4) and 4 or 1
+		infoOnly = true
+		MIN_W, MIN_H = InfoMode.minW, InfoMode.minH
+		currentW, currentH = InfoMode.w, InfoMode.h
+	else
+		InfoMode.w, InfoMode.h = currentW, currentH
+		infoOnly = false
+		MIN_W, MIN_H = InfoMode.normalMinW, InfoMode.normalMinH
+		currentW, currentH = InfoMode.normalW, InfoMode.normalH
+		pageToShow = InfoMode.prevPage or 1
+	end
+
+	refreshInfoBtn()
+	-- Do the layout FIRST (this sets the correct page position/size for the new mode),
+	-- THEN switch the page instantly.
+	applyMainSize(currentW, currentH, true)
+	setPage(pageToShow, true)
+	-- window glides to its new size
+	tweenMainSizeFrom(oldW, oldH)
+end
+
+InfoBtn.MouseButton1Click:Connect(function()
+	setInfoOnly(not infoOnly)
+end)
+
+InfoBtn.MouseEnter:Connect(function()
+	if not infoOnly then
+		Anim.tween(InfoBtn, 0.15, { TextColor3 = C.text })
+	end
+end)
+
+InfoBtn.MouseLeave:Connect(function()
+	refreshInfoBtn()
+end)
+
+-- ===================== CLOSE CONFIRMATION =====================
+-- Clicking X opens a warning dialog (same metal style). Nothing closes until you confirm.
+
+local closeDialogOpen = false
+local closing = false
+
+local function openCloseDialog()
+	if closeDialogOpen or closing then return end
+	closeDialogOpen = true
+
+	local inset = Vector2.new(0, 0)
+	pcall(function()
+		inset = GuiService:GetGuiInset()
+	end)
+
+	-- Dark overlay that blocks clicks behind the dialog
+	local overlay = Instance.new("TextButton")
+	overlay.Name = "CloseOverlay"
+	overlay.Position = UDim2.fromOffset(0, -inset.Y)
+	overlay.Size = UDim2.new(1, 0, 1, inset.Y)
+	overlay.BackgroundColor3 = Color3.new(0, 0, 0)
+	overlay.BackgroundTransparency = 1
+	overlay.BorderSizePixel = 0
+	overlay.AutoButtonColor = false
+	overlay.Text = ""
+	overlay.ZIndex = 100
+	overlay.Parent = GUI
+
+	local dialog = Instance.new("Frame")
+	dialog.Name = "Dialog"
+	dialog.AnchorPoint = Vector2.new(0.5, 0.5)
+	dialog.Position = UDim2.fromScale(0.5, 0.5)
+	dialog.Size = UDim2.fromOffset(300, 172)
+	dialog.BackgroundColor3 = C.bg
+	dialog.BorderSizePixel = 0
+	dialog.Active = true
+	dialog.Parent = overlay
+	Instance.new("UICorner", dialog).CornerRadius = UDim.new(0, 0)
+	Metal.panel(dialog, "raised", 0.6)
+
+	local dialogScale = Instance.new("UIScale")
+	dialogScale.Scale = 0.8
+	dialogScale.Parent = dialog
+
+	-- Rotating metallic border (same as the main window)
+	local dStroke = Instance.new("UIStroke")
+	dStroke.Color = Color3.new(1, 1, 1)
+	dStroke.Thickness = 1.5
+	dStroke.Parent = dialog
+
+	local dGrad = Instance.new("UIGradient")
+	dGrad.Color = ColorSequence.new(Color3.fromRGB(10, 10, 10))
+	dGrad.Parent = dStroke
+
+	-- Header bar
+	local header = Instance.new("Frame")
+	header.Name = "Header"
+	header.Size = UDim2.new(1, 0, 0, 36)
+	header.BackgroundColor3 = C.bg
+	header.BorderSizePixel = 0
+	header.Parent = dialog
+	Instance.new("UICorner", header).CornerRadius = UDim.new(0, 0)
+	Metal.panel(header, "bar", 1)
+
+	local headerFix = Instance.new("Frame")
+	headerFix.Size = UDim2.new(1, 0, 0, 12)
+	headerFix.Position = UDim2.new(0, 0, 1, -12)
+	headerFix.BackgroundColor3 = Metal.shade(C.bg, Metal.BAR_BOTTOM)
+	headerFix.BorderSizePixel = 0
+	headerFix.Parent = header
+
+	local headerLine = Instance.new("Frame")
+	headerLine.Size = UDim2.new(1, 0, 0, 1)
+	headerLine.Position = UDim2.new(0, 0, 1, 0)
+	headerLine.BackgroundColor3 = C.border
+	headerLine.BorderSizePixel = 0
+	headerLine.Parent = header
+
+	-- Warning badge with a pulsing ring
+	local badge = Instance.new("Frame")
+	badge.Name = "Badge"
+	badge.Size = UDim2.fromOffset(20, 20)
+	badge.Position = UDim2.fromOffset(12, 8)
+	badge.BackgroundColor3 = C.orange
+	badge.BorderSizePixel = 0
+	badge.Parent = header
+	Instance.new("UICorner", badge).CornerRadius = UDim.new(0, 0)
+	Metal.panel(badge, "raised", 0.8)
+
+	local badgeText = Instance.new("TextLabel")
+	badgeText.Size = UDim2.fromScale(1, 1)
+	badgeText.BackgroundTransparency = 1
+	badgeText.Text = "!"
+	badgeText.TextColor3 = Color3.fromRGB(40, 28, 6)
+	badgeText.Font = Enum.Font.Arcade
+	badgeText.TextSize = 13
+	badgeText.Parent = badge
+
+	local ring = Instance.new("UIStroke")
+	ring.Name = "PulseStroke"
+	ring.Color = C.orange
+	ring.Thickness = 2
+	ring.Transparency = 0.5
+	ring.Parent = badge
+
+	local dTitle = Instance.new("TextLabel")
+	dTitle.Size = UDim2.new(1, -52, 1, 0)
+	dTitle.Position = UDim2.fromOffset(42, 0)
+	dTitle.BackgroundTransparency = 1
+	dTitle.Text = "CLOSE INSPECTOR?"
+	dTitle.TextColor3 = C.text
+	dTitle.Font = Enum.Font.Arcade
+	dTitle.TextSize = 12
+	dTitle.TextXAlignment = Enum.TextXAlignment.Left
+	dTitle.Parent = header
+	Metal.chrome(dTitle)
+
+	-- Message
+	local msg1 = Instance.new("TextLabel")
+	msg1.Size = UDim2.new(1, -32, 0, 18)
+	msg1.Position = UDim2.fromOffset(16, 48)
+	msg1.BackgroundTransparency = 1
+	msg1.Text = "Are you sure you want to close?"
+	msg1.TextColor3 = C.text
+	msg1.Font = Enum.Font.Arcade
+	msg1.TextSize = 12
+	msg1.TextXAlignment = Enum.TextXAlignment.Left
+	msg1.Parent = dialog
+
+	local msg2 = Instance.new("TextLabel")
+	msg2.Size = UDim2.new(1, -32, 0, 34)
+	msg2.Position = UDim2.fromOffset(16, 68)
+	msg2.BackgroundTransparency = 1
+	msg2.Text = "Unsaved scan results and any running preview will be lost."
+	msg2.TextColor3 = C.textDim
+	msg2.Font = Enum.Font.Arcade
+	msg2.TextSize = 11
+	msg2.TextWrapped = true
+	msg2.TextXAlignment = Enum.TextXAlignment.Left
+	msg2.TextYAlignment = Enum.TextYAlignment.Top
+	msg2.Parent = dialog
+
+	-- Decision buttons
+	local function makeDialogBtn(text, bg, x)
+		local b = Instance.new("TextButton")
+		b.Size = UDim2.fromOffset(131, 32)
+		b.Position = UDim2.fromOffset(x, 126)
+		b.BackgroundColor3 = bg
+		b.BorderSizePixel = 0
+		b.AutoButtonColor = false
+		b.Text = text
+		b.TextColor3 = C.text
+		b.Font = Enum.Font.Arcade
+		b.TextSize = 10
+		b.Parent = dialog
+		Instance.new("UICorner", b).CornerRadius = UDim.new(0, 0)
+		Metal.gloss(b, 6)
+		Anim.button(b)
+		return b
+	end
+
+	local keepBtn = makeDialogBtn("KEEP OPEN", C.surface3, 14)
+	local closeBtn = makeDialogBtn("YES, CLOSE", C.redDark, 155)
+
+	local function dismiss()
+		if not closeDialogOpen or closing then return end
+		closeDialogOpen = false
+		Anim.tween(dialogScale, 0.18, { Scale = 0.88 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+		Anim.fadeOut(overlay, 0.18)
+		task.delay(0.2, function()
+			if overlay then overlay:Destroy() end
+		end)
+	end
+
+	local function confirm()
+		if closing then return end
+		closing = true
+		stopPreview()
+		Anim.tween(dialogScale, 0.2, { Scale = 0.88 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+		Anim.fadeOut(dialog, 0.2)
+		Anim.tween(overlay, 0.35, { BackgroundTransparency = 1 })
+		-- main window fades away and sinks slightly
+		Anim.fadeOut(Main, 0.32)
+		task.delay(0.35, function()
+			if GUI and GUI.Parent then
+				GUI:Destroy()
+			end
+		end)
+	end
+
+	keepBtn.MouseButton1Click:Connect(dismiss)
+	closeBtn.MouseButton1Click:Connect(confirm)
+
+	-- Clicking outside the dialog shakes it as a hint to choose
+	overlay.MouseButton1Click:Connect(function()
+		if closeDialogOpen and not closing then
+			Anim.shake(dialog)
+		end
+	end)
+
+	-- Open animation
+	Anim.tween(overlay, 0.25, { BackgroundTransparency = 0.45 })
+	Anim.tween(dialogScale, 0.35, { Scale = 1 }, Enum.EasingStyle.Back)
+	Anim.fadeIn(dialog, 0, 0.25)
+end
+
+Close.MouseButton1Click:Connect(openCloseDialog)
+
+-- ===================== DRAGGING =====================
+
+local dragging = false
+local dragStart, startPosition
+
+Top.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		dragging = true
+		dragStart = input.Position
+		startPosition = Main.Position
+	end
+end)
+
+Top.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		dragging = false
+	end
+end)
+
+Metal.Conns[#Metal.Conns + 1] = UIS.InputChanged:Connect(function(input)
+	if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then
+		return
+	end
+	if resizing and resizeStart and resizeStartSize then
+		local delta = input.Position - resizeStart
+		WinFx.pendingW = resizeStartSize.X + delta.X
+		WinFx.pendingH = resizeStartSize.Y + delta.Y
+		return
+	end
+	if dragging and dragStart and startPosition then
+		local delta = input.Position - dragStart
+		Main.Position = UDim2.new(
+			startPosition.X.Scale,
+			startPosition.X.Offset + delta.X,
+			startPosition.Y.Scale,
+			startPosition.Y.Offset + delta.Y
+		)
+	end
+end)
+
+-- Safety net: if the mouse/finger is released away from the title bar or resize handle,
+-- make sure dragging and resizing both stop.
+Metal.Conns[#Metal.Conns + 1] = UIS.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		dragging = false
+		if resizing then
+			endResize()
+		end
+	end
+end)
+
+-- ===================== CLEANUP =====================
+-- When the window is destroyed (close button or re-running the script), every loop stops.
+GUI.Destroying:Connect(function()
+	AutoScanning = false
+	for _, c in ipairs(Metal.Conns) do
+		pcall(function() c:Disconnect() end)
+	end
+	table.clear(Metal.Conns)
+	if Flip.Conn then
+		pcall(function() Flip.Conn:Disconnect() end)
+		Flip.Conn = nil
+	end
+	if WinFx.resizeConn then
+		pcall(function() WinFx.resizeConn:Disconnect() end)
+		WinFx.resizeConn = nil
+	end
+	table.clear(Flip.Active)
+	pcall(stopPreview)
+end)
+
+-- ===================== STARTUP =====================
+
+applyMainSize(currentW, currentH, true)
+setPage(1, true)
+refreshInfoBtn()
+refreshFlipAnimBtn()
+Status.Text = "0/0"
+
+scan()
